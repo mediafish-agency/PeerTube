@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
         self._create_top_section()
         self._create_queue_section()
         self._create_log_section()
-        self._create_status_bar()
+        self._create_status_bar() # Ensure status bar is created before attempting to update it
 
         self.log_message(f"Application started. Configured for instance: {self.configured_instance_url if self.configured_instance_url else 'URL NOT CONFIGURED'}")
 
@@ -61,27 +61,33 @@ class MainWindow(QMainWindow):
             self._attempt_auto_connection()
         elif not self.configured_instance_url:
             self.log_message("Auto-connect skipped: Instance URL not configured.")
-            self.connection_status_label.setText("Error: Instance URL not configured.") # Assuming connection_status_label exists
+            # self.connection_status_label.setText("Error: Instance URL not configured.") # Removed
+            self._update_connection_status_indicator(False, "Error: Instance URL not configured.")
         else: # URL is there but username/password might be missing from config
             self.log_message("Auto-connect skipped: Username not configured in settings.py.")
-            # GUI should reflect that connection needs to be manually triggered or config fixed.
-            # For now, we assume connect button is gone, so this state means app is not connected.
-            self.connection_status_label.setText("Ready. Configure username in settings to auto-connect.")
+            # self.connection_status_label.setText("Ready. Configure username in settings to auto-connect.") # Removed
+            self._update_connection_status_indicator(False, "Ready. Configure username to auto-connect.")
 
 
     def _create_status_bar(self):
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
-        self.show_status_message("Ready")
+        # self.show_status_message("Ready") # Initial message will be set by connection status logic
+
+        # Create the new connection status indicator label for the status bar
+        self.connection_status_indicator_label = QLabel("Status: Initializing...")
+        self.connection_status_indicator_label.setStyleSheet("padding-left: 5px; padding-right: 5px;") # Add some padding
+        self.statusBar.addPermanentWidget(self.connection_status_indicator_label)
+
 
     def _create_top_section(self):
         top_section_group = QGroupBox("Video Details") # Renamed as connection is now auto/implicit
         top_layout = QVBoxLayout()
 
-        # Connection Status Label (replaces connect button)
-        self.connection_status_label = QLabel("Status: Initializing...")
-        self.connection_status_label.setAlignment(Qt.AlignCenter)
-        top_layout.addWidget(self.connection_status_label)
+        # Connection Status Label (replaces connect button) - REMOVED
+        # self.connection_status_label = QLabel("Status: Initializing...")
+        # self.connection_status_label.setAlignment(Qt.AlignCenter)
+        # top_layout.addWidget(self.connection_status_label)
 
         # File Selection
         file_layout = QHBoxLayout()
@@ -152,6 +158,33 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(log_section_group)
         self.layout.setStretchFactor(log_section_group, 1)
 
+    def _update_connection_status_indicator(self, connected, message=""):
+        # This method will be fully implemented in the next step.
+        # For now, it just logs and updates the status bar label.
+        # connected: True (green), False (red), None (neutral/yellow)
+
+        display_message = message
+        color = "black" # Default color
+
+        if connected is True:
+            color = "green"
+            if not display_message: display_message = "Connected"
+        elif connected is False:
+            color = "red"
+            if not display_message: display_message = "Disconnected"
+        elif connected is None: # Intermediate state like "connecting"
+            color = "orange" # Using orange for connecting/initializing
+            if not display_message: display_message = "Connecting..."
+
+        self.log_message(f"[StatusIndicator] Status: {('Connected' if connected else 'Disconnected' if connected is False else 'Connecting')}, Message: {message}")
+
+        if hasattr(self, 'connection_status_indicator_label'):
+            self.connection_status_indicator_label.setText(display_message)
+            self.connection_status_indicator_label.setStyleSheet(f"color: {color}; padding-left: 5px; padding-right: 5px;")
+        else:
+            self.log_message("Error: connection_status_indicator_label not found during update.")
+
+
     def log_message_from_thread(self, message):
         self.log_output_area.append(message)
         print(message)
@@ -169,14 +202,16 @@ class MainWindow(QMainWindow):
     def _attempt_auto_connection(self):
         if not self.configured_instance_url or not self.configured_username or self.configured_password is None:
             self.log_message("Auto-connect failed: Missing instance URL, username, or password in configuration.")
-            if hasattr(self, 'connection_status_label'): # Check if label exists
-                self.connection_status_label.setText("Error: Configuration incomplete.")
+            # if hasattr(self, 'connection_status_label'): # Check if label exists # Removed
+            #     self.connection_status_label.setText("Error: Configuration incomplete.") # Removed
+            self._update_connection_status_indicator(False, "Error: Config incomplete")
             self.show_status_message("Auto-connect failed: Configuration incomplete.", 5000)
             return
 
         self.log_message(f"Attempting automatic connection to {self.configured_instance_url} as {self.configured_username}...")
-        if hasattr(self, 'connection_status_label'):
-            self.connection_status_label.setText(f"Connecting to {self.configured_instance_url}...")
+        # if hasattr(self, 'connection_status_label'): # Removed
+        #     self.connection_status_label.setText(f"Connecting to {self.configured_instance_url}...") # Removed
+        self._update_connection_status_indicator(None, f"Connecting to {self.configured_instance_url.split('//')[-1]}...")
         self.show_status_message(f"Attempting auto-connection to {self.configured_instance_url}...")
 
         self._perform_connection_logic(self.configured_username, self.configured_password)
@@ -196,14 +231,16 @@ class MainWindow(QMainWindow):
         self.peertube_client = PeerTubeClient(self.configured_instance_url)
 
         self.log_message(f"Authenticating user {username}...")
+        self._update_connection_status_indicator(None, f"Authenticating {username}...")
         self.show_status_message(f"Authenticating {username}...")
 
         if self.peertube_client.authenticate(username, password):
             self.log_message("Authentication successful!")
             self.show_status_message("Authentication successful!", 5000)
-            if hasattr(self, 'connection_status_label'):
-                self.connection_status_label.setText(f"Connected: {self.peertube_client.username}@{self.configured_instance_url.split('//')[-1]}")
-                self.connection_status_label.setStyleSheet("color: green;")
+            # if hasattr(self, 'connection_status_label'): # Removed
+            #     self.connection_status_label.setText(f"Connected: {self.peertube_client.username}@{self.configured_instance_url.split('//')[-1]}") # Removed
+            #     self.connection_status_label.setStyleSheet("color: green;") # Removed
+            self._update_connection_status_indicator(True, f"Connected: {self.peertube_client.username}@{self.configured_instance_url.split('//')[-1]}")
 
 
             if self.queue_manager:
@@ -223,9 +260,10 @@ class MainWindow(QMainWindow):
         else:
             self.log_message("Authentication failed. Check credentials in settings.py or server status.")
             self.show_status_message("Authentication failed.", 5000)
-            if hasattr(self, 'connection_status_label'):
-                self.connection_status_label.setText("Connection Failed. Check settings/logs.")
-                self.connection_status_label.setStyleSheet("color: red;")
+            # if hasattr(self, 'connection_status_label'): # Removed
+            #     self.connection_status_label.setText("Connection Failed. Check settings/logs.") # Removed
+            #     self.connection_status_label.setStyleSheet("color: red;") # Removed
+            self._update_connection_status_indicator(False, "Connection Failed. Check logs.")
             self.peertube_client = None # Ensure client is None on failure
             # Potentially disable upload functionality here
             self.channel_combo.clear()
