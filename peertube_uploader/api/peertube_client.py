@@ -205,10 +205,36 @@ class PeerTubeClient:
 
             response = requests.post(upload_url, headers=headers, json=payload)
 
-            # 200 means file already exists and upload can be resumed
-            # 201 means new upload initialized
-            if response.status_code == 200 or response.status_code == 201:
+            upload_data = None
+            try:
+                # Attempt to parse JSON first, as successful responses (200, 201) should have JSON.
+                # Errors (4xx, 5xx) might also have JSON, or might not.
                 upload_data = response.json()
+            except json.JSONDecodeError as json_err_inner:
+                print(f"CRITICAL: JSONDecodeError immediately after request. Status: {response.status_code}. Response Text: '{response.text}'")
+                # If it's a 200/201 but not JSON, that's a server problem.
+                # If it's another status code, the HTTPError handler below should catch it if raise_for_status() is called,
+                # but we log here to ensure we see the non-JSON body of an error.
+                if 200 <= response.status_code < 300: # Success range, but not JSON
+                     print("Server returned success status but non-JSON body during resumable init.")
+                     # This is unexpected for a 200/201 from this endpoint.
+                # We will likely hit response.raise_for_status() next if status is an error code.
+                # If not, and we expected JSON (like for 200/201), this is an issue.
+                # For now, let this proceed to status code checking, or raise if it was a success code.
+                if not (200 <= response.status_code < 300):
+                    response.raise_for_status() # Trigger HTTPError if it's an error status
+                # If it was 200/201 but not JSON, this is a problem.
+                print(f"JSONDecodeError after request (before status check): {json_err_inner}") # Log it
+                # Let it fall through to status code check or subsequent error handling
+                # If upload_data is still None, it will be handled.
+
+
+            # Check status codes AFTER attempting to parse JSON if it was expected
+            if response.status_code == 200 or response.status_code == 201:
+                if upload_data is None: # Should have been JSON if 200/201
+                    print(f"Error: Server returned status {response.status_code} but response was not valid JSON. Response text: '{response.text}'")
+                    return None
+
                 # The 'Location' header contains the upload_id for PUT requests
                 # However, the response body for POST init might also contain it or other necessary info.
                 # Based on tus protocol, Location header is key for subsequent PUTs.
