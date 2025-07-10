@@ -181,13 +181,20 @@ class PeerTubeClient:
             "channelId": channel_id,
             "name": video_name,
             "filename": os.path.basename(file_path), # Required for resumable
-            "description": video_description,
             "privacy": privacy, # 1: Public, 2: Unlisted, 3: Private, 4: Internal
             "nsfw": nsfw,
-            # "tags": tags if tags else [], # Optional
             # "waitTranscoding": True, # Optional
             # "generateTranscription": False # Optional
         }
+        if video_description: # Only add description if it's not empty
+            payload["description"] = video_description
+        else:
+            # If description is empty, PeerTube might prefer it to be omitted or explicitly null.
+            # For now, omitting if empty. If API requires it, this needs to be handled differently (e.g. default value or GUI enforcement)
+            # Based on the error, "Invalid value" for empty string suggests omitting or sending null might be better.
+            # Let's try omitting first. If server complains, then try sending "description": None (or null in JSON)
+            pass
+
         if tags:
             payload["tags"] = tags
 

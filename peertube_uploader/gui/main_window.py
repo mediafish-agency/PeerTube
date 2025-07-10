@@ -274,6 +274,10 @@ class MainWindow(QMainWindow):
         if not title:
             QMessageBox.warning(self, "Input Error", "Please enter a video title.")
             return
+        if not (3 <= len(title) <= 120):
+            QMessageBox.warning(self, "Input Error", "Video title must be between 3 and 120 characters.")
+            self.log_message("Error: Video title must be between 3 and 120 characters.")
+            return
 
         # Description, privacy, etc., can be added as more fields or defaults
         task_id = self.queue_manager.add_task(
