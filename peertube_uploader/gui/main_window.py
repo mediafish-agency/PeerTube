@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
         self._create_log_section()
         self._create_status_bar() # Ensure status bar is created before attempting to update it
 
-        self.log_message(f"Application started. Configured for instance: {self.configured_instance_url if self.configured_instance_url else 'URL NOT CONFIGURED'}")
+        self.log_message(f"Application started. Configured endpoint: {'Provided' if self.configured_instance_url else 'Not Provided'}.")
 
         if self.configured_instance_url and self.configured_username: # Only attempt auto-connect if URL and user are set
             self._attempt_auto_connection()
@@ -217,9 +217,9 @@ class MainWindow(QMainWindow):
             self.show_status_message("Auto-connect failed: Configuration incomplete.", 5000)
             return
 
-        self.log_message(f"Attempting automatic connection to {self.configured_instance_url} as {self.configured_username}...")
+        self.log_message("Attempting automatic connection to the configured tadreb.live service...")
         self._update_connection_status_indicator(None, "Connecting...") # Generic message
-        self.show_status_message(f"Attempting auto-connection to {self.configured_instance_url}...")
+        self.show_status_message(f"Attempting auto-connection to {self.configured_instance_url}...") # Keep URL here for status bar, but not in main log
 
         self._perform_connection_logic(self.configured_username, self.configured_password)
 
