@@ -1,18 +1,23 @@
 # Application settings
-# For now, this primarily handles the fixed PeerTube instance URL.
-# It could be expanded to load from a file if more complex settings are needed.
 
+# WARNING: Storing plaintext passwords in configuration files is a security risk.
+# For production or shared environments, consider more secure methods like
+# environment variables, system keychain integration, or prompting the user.
 PEERTUBE_INSTANCE_URL = "https://store.tadreb.live"
+PEERTUBE_USERNAME = "root"
+PEERTUBE_PASSWORD = "Ms3343785@"
 
 def load_settings():
     """
     Returns a dictionary of application settings.
-    Currently, it only returns the fixed instance URL.
     """
-    print(f"DEBUG: Loading settings. Instance URL: {PEERTUBE_INSTANCE_URL}")
-    return {
-        'instance_url': PEERTUBE_INSTANCE_URL
+    settings = {
+        'instance_url': PEERTUBE_INSTANCE_URL,
+        'username': PEERTUBE_USERNAME,
+        'password': PEERTUBE_PASSWORD
     }
+    print(f"DEBUG: Loading settings. Instance URL: {settings['instance_url']}, User: {settings['username']}")
+    return settings
 
 def save_settings(settings_dict):
     """

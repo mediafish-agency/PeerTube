@@ -49,21 +49,32 @@ README.md                 # This file (specific to the uploader app)
 2.  **Ensure Python 3 is installed.**
     You can download it from [python.org](https://www.python.org/).
 
-3.  **Create a virtual environment (recommended):**
+3.  **Configure Credentials (Important!):**
+    *   Open the file `peertube_uploader/config/settings.py`.
+    *   Update the following lines with your PeerTube instance username and password:
+        ```python
+        PEERTUBE_USERNAME = "your_username"  # Replace with your actual username
+        PEERTUBE_PASSWORD = "your_password"  # Replace with your actual password
+        ```
+    *   The instance URL is pre-configured to `https://store.tadreb.live`.
+    *   **Security Warning:** Storing plaintext passwords in configuration files is a security risk. For production or shared environments, consider more secure methods (not yet implemented in this version).
+
+4.  **Create a virtual environment (recommended):**
     ```bash
     python3 -m venv venv_uploader
     source venv_uploader/bin/activate  # On Windows: venv_uploader\Scripts\activate
     ```
 
-4.  **Install dependencies:**
+5.  **Install dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
-5.  **Run the application:**
+6.  **Run the application:**
     ```bash
     python peertube_uploader/main.py
     ```
+    The application will attempt to connect automatically on startup using the credentials from `settings.py`.
 
 ## Building Standalone Executables
 
@@ -107,21 +118,19 @@ PyInstaller is used to create standalone executables for "tadreb.live Video Uplo
 
 ## Usage
 
-1.  Launch the application (either from source or the built executable). The application is pre-configured to connect to `https://store.tadreb.live`.
-2.  Click the "Connect & Authenticate to: https://store.tadreb.live" button.
-3.  Enter your PeerTube username and password for the `https://store.tadreb.live` instance when prompted by dialog boxes.
-5.  If authentication is successful, your channels will be loaded into the "Channel" dropdown.
+1.  **Ensure credentials are set** in `peertube_uploader/config/settings.py` as described in the "Setup" section.
+2.  Launch the application (either from source or the built executable).
+3.  The application will automatically attempt to connect to the pre-configured instance (`https://store.tadreb.live`) using the credentials from `settings.py`.
+    *   Observe the status label at the top for connection status (e.g., "Connecting...", "Connected as: username", "Connection Failed").
+4.  If the connection is successful, your channels will be loaded into the "Channel" dropdown.
+    *   **Regular Users:** Will see only their own channels.
+    *   **Administrators/Moderators:** Will see all channels on the instance. Channels not owned by them will be indicated with an "(Owner: <owner_username>)" suffix.
 6.  Click "Browse" to select a video file you want to upload.
-    *   Select the desired channel from the dropdown.
-        *   **Regular Users:** Will see only their own channels.
-        *   **Administrators/Moderators:** Will see all channels on the instance. Channels not owned by them will be indicated with an "(Owner: <owner_username>)" suffix.
-    *   Enter a title for your video (must be between 3 and 120 characters).
-9.  Click "Add to Upload Queue". The video will be added to the queue list, showing its title, channel, and initial "Pending" status.
-10. The application will automatically start processing the queue. The status of the current task will change to "Initializing", then "Uploading", and its progress bar will update.
-11. Upon completion, the task status will show "Completed" (and turn green) or "Failed" (and turn red with an error message).
-12. Monitor detailed activity and any errors in the "Logs" section at the bottom of the window.
-13. You can remove a selected task from the queue using the "Remove Selected Task" button (this will attempt to cancel an ongoing upload for that task).
-14. You can clear all tasks marked as "Completed" from the list using the "Clear Completed Tasks" button.
+6.  Select the desired channel from the dropdown (this will enable the "Add to Upload Queue" button).
+7.  Enter a title for your video (must be between 3 and 120 characters).
+8.  Click "Add to Upload Queue". The video will be added to the queue list.
+9.  The application will automatically start processing the queue. Monitor progress and status in the queue list and the logs section.
+10. You can remove tasks using "Remove Selected Task" or clear finished ones with "Clear Completed Tasks".
 
 ## Important Note on Uploading to Any Channel
 

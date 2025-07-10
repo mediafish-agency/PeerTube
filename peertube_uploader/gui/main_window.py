@@ -47,12 +47,27 @@ class MainWindow(QMainWindow):
         self.gui_signals.task_update_signal.connect(self.handle_task_update_signal)
         self.gui_signals.log_signal.connect(self.log_message_from_thread)
 
+        self.configured_username = app_settings.get('username', '')
+        self.configured_password = app_settings.get('password', '')
+
         self._create_top_section()
         self._create_queue_section()
         self._create_log_section()
         self._create_status_bar()
 
-        self.log_message(f"Application started. Configured for instance: {self.configured_instance_url if self.configured_instance_url else 'NOT CONFIGURED'}")
+        self.log_message(f"Application started. Configured for instance: {self.configured_instance_url if self.configured_instance_url else 'URL NOT CONFIGURED'}")
+
+        if self.configured_instance_url and self.configured_username: # Only attempt auto-connect if URL and user are set
+            self._attempt_auto_connection()
+        elif not self.configured_instance_url:
+            self.log_message("Auto-connect skipped: Instance URL not configured.")
+            self.connection_status_label.setText("Error: Instance URL not configured.") # Assuming connection_status_label exists
+        else: # URL is there but username/password might be missing from config
+            self.log_message("Auto-connect skipped: Username not configured in settings.py.")
+            # GUI should reflect that connection needs to be manually triggered or config fixed.
+            # For now, we assume connect button is gone, so this state means app is not connected.
+            self.connection_status_label.setText("Ready. Configure username in settings to auto-connect.")
+
 
     def _create_status_bar(self):
         self.statusBar = QStatusBar()
@@ -60,20 +75,13 @@ class MainWindow(QMainWindow):
         self.show_status_message("Ready")
 
     def _create_top_section(self):
-        top_section_group = QGroupBox("Video Details & Connection")
+        top_section_group = QGroupBox("Video Details") # Renamed as connection is now auto/implicit
         top_layout = QVBoxLayout()
 
-        # Instance URL input is removed. Button text will show the configured URL.
-        if self.configured_instance_url:
-            connect_button_text = f"Connect & Authenticate to: {self.configured_instance_url}"
-        else:
-            connect_button_text = "Connect & Authenticate (URL NOT CONFIGURED)"
-
-        self.connect_button = QPushButton(connect_button_text)
-        self.connect_button.clicked.connect(self.connect_and_authenticate)
-        if not self.configured_instance_url:
-            self.connect_button.setEnabled(False) # Disable if no URL
-        top_layout.addWidget(self.connect_button)
+        # Connection Status Label (replaces connect button)
+        self.connection_status_label = QLabel("Status: Initializing...")
+        self.connection_status_label.setAlignment(Qt.AlignCenter)
+        top_layout.addWidget(self.connection_status_label)
 
         # File Selection
         file_layout = QHBoxLayout()
@@ -92,6 +100,7 @@ class MainWindow(QMainWindow):
         self.channel_combo = QComboBox()
         self.channel_combo.addItem("Connect to instance first")
         self.channel_combo.setEnabled(False)
+        self.channel_combo.currentIndexChanged.connect(self._on_channel_selection_change)
         channel_layout.addWidget(QLabel("Channel:"))
         channel_layout.addWidget(self.channel_combo, 1)
         top_layout.addLayout(channel_layout)
@@ -107,6 +116,7 @@ class MainWindow(QMainWindow):
         # Add to Queue Button
         self.add_to_queue_button = QPushButton("Add to Upload Queue")
         self.add_to_queue_button.clicked.connect(self.add_to_queue)
+        self.add_to_queue_button.setEnabled(False) # Initially disabled
         top_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
 
         top_section_group.setLayout(top_layout)
@@ -156,34 +166,34 @@ class MainWindow(QMainWindow):
     def show_status_message(self, message, timeout=3000):
         self.statusBar.showMessage(message, timeout)
 
-    def connect_and_authenticate(self):
-        # Instance URL is now from self.configured_instance_url
-        if not self.configured_instance_url:
-            QMessageBox.critical(self, "Configuration Error", "PeerTube instance URL is not configured. Cannot connect.")
-            self.log_message("Error: Connection attempt failed, instance URL not configured.")
+    def _attempt_auto_connection(self):
+        if not self.configured_instance_url or not self.configured_username or self.configured_password is None:
+            self.log_message("Auto-connect failed: Missing instance URL, username, or password in configuration.")
+            if hasattr(self, 'connection_status_label'): # Check if label exists
+                self.connection_status_label.setText("Error: Configuration incomplete.")
+            self.show_status_message("Auto-connect failed: Configuration incomplete.", 5000)
             return
 
-        instance_url = self.configured_instance_url # Use the configured URL
+        self.log_message(f"Attempting automatic connection to {self.configured_instance_url} as {self.configured_username}...")
+        if hasattr(self, 'connection_status_label'):
+            self.connection_status_label.setText(f"Connecting to {self.configured_instance_url}...")
+        self.show_status_message(f"Attempting auto-connection to {self.configured_instance_url}...")
 
+        self._perform_connection_logic(self.configured_username, self.configured_password)
+
+    def _perform_connection_logic(self, username, password):
+        """
+        Handles the actual logic of connecting, authenticating, and loading channels.
+        Can be called by auto-connect or a manual connect button (if re-added).
+        Assumes self.configured_instance_url is set.
+        """
         if self.queue_manager and self.queue_manager.is_processing:
+            # This check might be less relevant if auto-connect is only on startup
+            # but good if we re-introduce a manual connect/reconnect.
             self.queue_manager.stop_processing()
-            self.log_message("Stopped previous queue processing due to new connection attempt.")
+            self.log_message("Stopped ongoing queue processing for (re)connection attempt.")
 
-        self.peertube_client = PeerTubeClient(instance_url) # Use configured URL
-        self.log_message(f"Attempting to connect to {instance_url}...")
-        self.show_status_message(f"Connecting to {instance_url}...")
-
-        username, ok1 = QInputDialog.getText(self, "Login", f"Enter Username for {instance_url}:")
-        if not ok1 or not username:
-            self.log_message("Authentication cancelled by user (username).")
-            self.show_status_message("Authentication cancelled.")
-            return
-
-        password, ok2 = QInputDialog.getText(self, "Login", "Enter Password:", QLineEdit.Password)
-        if not ok2:
-            self.log_message("Authentication cancelled by user (password).")
-            self.show_status_message("Authentication cancelled.")
-            return
+        self.peertube_client = PeerTubeClient(self.configured_instance_url)
 
         self.log_message(f"Authenticating user {username}...")
         self.show_status_message(f"Authenticating {username}...")
@@ -191,12 +201,15 @@ class MainWindow(QMainWindow):
         if self.peertube_client.authenticate(username, password):
             self.log_message("Authentication successful!")
             self.show_status_message("Authentication successful!", 5000)
+            if hasattr(self, 'connection_status_label'):
+                self.connection_status_label.setText(f"Connected: {self.peertube_client.username}@{self.configured_instance_url.split('//')[-1]}")
+                self.connection_status_label.setStyleSheet("color: green;")
+
 
             if self.queue_manager:
-                 self.queue_manager.stop_processing() # Stop old one if any
-                 # Update existing queue manager's client if it exists and is processing, or re-init
-                 self.queue_manager.peertube_client = self.peertube_client
-                 self.log_message("Updated PeerTube client for existing QueueManager.")
+                self.queue_manager.peertube_client = self.peertube_client # Update client for existing manager
+                self.queue_manager.start_processing() # Resume processing if it was stopped
+                self.log_message("Updated PeerTube client for existing QueueManager and restarted queue.")
             else:
                 self.queue_manager = UploadQueueManager(
                     peertube_client=self.peertube_client,
@@ -204,22 +217,40 @@ class MainWindow(QMainWindow):
                     log_callback=self.gui_signals.emit_log
                 )
                 self.log_message("UploadQueueManager initialized.")
+                # queue_manager.start_processing() will be called when a task is added if not already running.
+
             self.load_channels()
         else:
-            self.log_message("Authentication failed. Check logs and credentials.")
-            QMessageBox.critical(self, "Authentication Failed", "Could not authenticate. Please check credentials and logs.")
+            self.log_message("Authentication failed. Check credentials in settings.py or server status.")
             self.show_status_message("Authentication failed.", 5000)
-            self.peertube_client = None
-            # Do not nullify queue_manager here, it might have pending tasks from a previous session if we implement saving queue state
+            if hasattr(self, 'connection_status_label'):
+                self.connection_status_label.setText("Connection Failed. Check settings/logs.")
+                self.connection_status_label.setStyleSheet("color: red;")
+            self.peertube_client = None # Ensure client is None on failure
+            # Potentially disable upload functionality here
+            self.channel_combo.clear()
+            self.channel_combo.addItem("Connection Failed")
+            self.channel_combo.setEnabled(False)
+            self.add_to_queue_button.setEnabled(False)
+
+
+    def _on_channel_selection_change(self, index):
+        # Enable "Add to Queue" only if a valid channel (not the placeholder) is selected
+        if index > 0 and self.peertube_client and self.peertube_client.access_token: # Index 0 is "--- Select ---"
+            self.add_to_queue_button.setEnabled(True)
+        else:
+            self.add_to_queue_button.setEnabled(False)
 
     def load_channels(self):
         if not self.peertube_client or not self.peertube_client.access_token:
-            self.log_message("Cannot load channels: Not authenticated.")
+            self.log_message("Cannot load channels: Not authenticated or client not initialized.")
             QMessageBox.warning(self, "Error", "Not authenticated. Please connect and authenticate first.")
+            self.add_to_queue_button.setEnabled(False)
             return
 
         self.log_message("Loading channels...")
         self.show_status_message("Loading channels...")
+        self.add_to_queue_button.setEnabled(False) # Disable while loading
         channels_data = self.peertube_client.get_channels()
 
         self.channel_combo.clear()
@@ -256,12 +287,18 @@ class MainWindow(QMainWindow):
                 self.channel_combo.addItem("No channels found")
                 self.channel_combo.setEnabled(False)
                 self.show_status_message("No channels found.", 3000)
-        else:
+                self.add_to_queue_button.setEnabled(False)
+        else: # channels_data is None (error during fetch)
             self.log_message("Failed to load channels. See logs.")
             self.channel_combo.addItem("Failed to load channels")
             self.channel_combo.setEnabled(False)
+            self.add_to_queue_button.setEnabled(False)
             QMessageBox.critical(self, "Error", "Failed to load channels from the PeerTube instance.")
             self.show_status_message("Failed to load channels.", 3000)
+
+        # Call this to set initial state of add_to_queue_button based on current selection
+        self._on_channel_selection_change(self.channel_combo.currentIndex())
+
 
     def browse_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Select Video File", "", "Video Files (*.mp4 *.avi *.mkv *.mov *.webm);;All Files (*)")
