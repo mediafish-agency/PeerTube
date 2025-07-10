@@ -229,14 +229,84 @@ class PeerTubeClient:
                 # If upload_data is still None, it will be handled.
 
 
-            # Check status codes AFTER attempting to parse JSON if it was expected
-            if response.status_code == 200 or response.status_code == 201:
-                if upload_data is None: # Should have been JSON if 200/201
-                    print(f"Error: Server returned status {response.status_code} but response was not valid JSON. Response text: '{response.text}'")
+            # Check status codes AFTER attempting to parse JSON (if it was expected or an error occurred)
+            if response.status_code == 201: # Created - Primary success case for new upload
+                location_header = response.headers.get('Location')
+                if not location_header or "?upload_id=" not in location_header:
+                    print(f"Error: Status 201 but Location header missing or malformed for upload_id. Header: '{location_header}'. Response Text: '{response.text}'")
                     return None
 
-                # The 'Location' header contains the upload_id for PUT requests
-                # However, the response body for POST init might also contain it or other necessary info.
+                upload_id = location_header.split("?upload_id=")[-1]
+                video_info_from_body = upload_data.get("video") if upload_data is not None else None
+
+                if video_info_from_body:
+                    print(f"Resumable upload initialized (201). Upload ID: {upload_id}. Video created with ID: {video_info_from_body.get('id')}")
+                else: # This case will be hit if body was empty but Location header was fine
+                    print(f"Resumable upload initialized (201 via Location header). Upload ID: {upload_id}. JSON body was empty or invalid, video ID not yet available from body.")
+                return {"upload_id": upload_id, "file_size": file_size, "video_data": video_info_from_body}
+
+            elif response.status_code == 200: # OK - Usually for resuming an existing upload, MUST have JSON.
+                if upload_data is None:
+                    print(f"Error: Server returned status 200 but response was not valid JSON (or empty). Response text: '{response.text}'")
+                    return None
+
+                location_header = response.headers.get('Location')
+                upload_id = None
+                if location_header and "?upload_id=" in location_header:
+                    upload_id = location_header.split("?upload_id=")[-1]
+
+                # For 200 on POST init, TUS implies client might have tried to create an upload that already exists.
+                # The server might return details of the existing upload.
+                # PeerTube specific: if upload_data contains 'upload_id' or 'video.id', it's useful.
+                # We need a reliable way to get the upload_id to proceed. Location is preferred.
+                if not upload_id and upload_data.get("upload_id"): # Fallback to body if present
+                    upload_id = upload_data.get("upload_id")
+                elif not upload_id and upload_data.get("video", {}).get("resumableUpload", {}).get("uploadId"): # More nested possibility
+                    upload_id = upload_data["video"]["resumableUpload"]["uploadId"]
+
+                if not upload_id:
+                    print(f"Error: Status 200 but could not determine upload_id. Location: '{location_header}'. Body: '{upload_data}'")
+                    return None
+
+                print(f"Resumable upload session found/resumed (200). Upload ID: {upload_id}")
+                video_info_from_body = upload_data.get("video")
+                return {"upload_id": upload_id, "file_size": file_size, "video_data": video_info_from_body}
+
+            else: # Not 200 or 201
+                # If we got here, it means response.json() might have succeeded on an error code (e.g. 400 with JSON body)
+                # or raise_for_status() was not hit in the JSONDecodeError block.
+                # We should ensure an error is raised if not already.
+                if not (200 <= response.status_code < 300): # If it's an error status code
+                    if upload_data: # We have a JSON body for the error
+                        print(f"Error response from server (Status {response.status_code}): {json.dumps(upload_data)}")
+                    else: # No JSON body for the error, just text
+                        print(f"Error response from server (Status {response.status_code}): {response.text}")
+                response.raise_for_status() # This will raise HTTPError for 4xx/5xx
+
+        except requests.exceptions.HTTPError as http_err:
+            # This catches raise_for_status() calls
+            print(f"HTTP error initializing resumable upload: {http_err}")
+            # The response content might have already been logged if upload_data was populated from JSON error body
+            if http_err.response and not upload_data: # only print if not already printed via upload_data
+                print(f"Response content for HTTPError: {http_err.response.text}")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error initializing resumable upload (RequestException): {e}")
+            if e.response is not None:
+                print(f"Underlying response status code: {e.response.status_code}")
+                print(f"Underlying response text: '{e.response.text}'")
+            return None
+        except json.JSONDecodeError as json_err:
+            # This specific block for JSONDecodeError on the main response.json() call
+            # might be less likely to be hit directly if the nested one catches it first,
+            # but kept for robustness.
+            print(f"Outer JSONDecodeError during resumable init. Status: {response.status_code if response else 'N/A'}")
+            raw_response_text = response.text if response else "No response object"
+            print(f"Raw response text for outer JSONDecodeError: '{raw_response_text}'")
+            print(f"Outer JSONDecodeError details: {json_err}")
+            return None
+
+    def upload_video_chunk(self, upload_id, file_path, chunk_start, chunk_size, total_size, progress_callback=None):
                 # Based on tus protocol, Location header is key for subsequent PUTs.
                 # Let's check response headers and body.
                 # PeerTube's resumable upload API might differ slightly from pure TUS.
