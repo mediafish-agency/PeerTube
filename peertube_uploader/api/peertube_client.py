@@ -113,27 +113,27 @@ class PeerTubeClient:
             print("Error: Not authenticated. Cannot fetch channels.")
             return None
 
-        # Ensure user details (including role) are fetched if not already
-        if self.user_role_id is None and self.username is None:
+        # Ensure user details are fetched (for role and username)
+        if self.user_role_id is None and self.username is None: # Check if role is already known
             if not self._fetch_user_details():
-                print("Failed to fetch user details, cannot determine channel list strategy.")
-                return None # Or return empty list, or raise error
+                print("Failed to fetch user details. Cannot determine channel fetch strategy.")
+                return None
 
         headers = {'Authorization': f'Bearer {self.access_token}'}
 
-        # Role IDs: 0 for Admin, 1 for Moderator, 2 for User
-        if self.user_role_id == 0 or self.user_role_id == 1:
-            print(f"User is Admin/Moderator (Role: {self.user_role_id}). Fetching all video channels.")
+        # Admin or Moderator: Fetch all channels
+        if self.user_role_id in (0, 1):
+            print(f"User is Admin/Moderator (Role: {self.user_role_id}). Fetching all video channels...")
             all_channels_list = []
             start = 0
             count = 50
             total_expected = -1
 
             while True:
-                all_channels_url = f"{self.instance_url}/api/v1/video-channels?start={start}&count={count}&sort=-createdAt"
+                url = f"{self.instance_url}/api/v1/video-channels?start={start}&count={count}&sort=-createdAt"
                 response_ch = None
                 try:
-                    response_ch = requests.get(all_channels_url, headers=headers)
+                    response_ch = requests.get(url, headers=headers)
                     response_ch.raise_for_status()
                     page_data = response_ch.json()
 
@@ -145,71 +145,72 @@ class PeerTubeClient:
                         break
 
                     for ch in page_channels:
-                        owner_account_info = ch.get('ownerAccount', {})
+                        owner = ch.get('ownerAccount', {})
                         all_channels_list.append({
                             'id': ch.get('id'),
                             'displayName': ch.get('displayName'),
                             'name': ch.get('name'),
-                            'ownerAccountName': owner_account_info.get('name', 'N/A')
+                            'ownerAccountName': owner.get('name', 'N/A')
                         })
 
                     if total_expected == 0 or len(all_channels_list) >= total_expected or len(page_channels) < count:
                         break
                     start += count
 
-                except requests.exceptions.HTTPError as http_err_ch:
-                    err_text_ch = http_err_ch.response.text if http_err_ch.response is not None else "No response body"
-                    print(f"HTTP error fetching all channels page: {http_err_ch}. Response: {err_text_ch}")
+                except requests.exceptions.HTTPError as http_err:
+                    err_text = http_err.response.text if http_err.response else "No response body"
+                    print(f"HTTP error fetching all channels: {http_err}. Response: {err_text}")
                     return all_channels_list if all_channels_list else None
-                except requests.exceptions.RequestException as e_ch:
-                    print(f"Error fetching all channels page: {e_ch}")
+                except requests.exceptions.RequestException as req_err:
+                    print(f"Error fetching all channels: {req_err}")
                     return all_channels_list if all_channels_list else None
-                except json.JSONDecodeError as json_err_ch:
-                    resp_text_ch = response_ch.text if response_ch is not None else "N/A"
-                    status_code_ch = response_ch.status_code if response_ch is not None else "N/A"
-                    print(f"Error decoding JSON for all channels page. Status: {status_code_ch}. Text: '{resp_text_ch}'. Error: {json_err_ch}")
+                except json.JSONDecodeError as json_err:
+                    resp_text = response_ch.text if response_ch else "N/A"
+                    status_code = response_ch.status_code if response_ch else "N/A"
+                    print(f"JSON decode error for all channels. Status: {status_code}. Response: '{resp_text}'. Error: {json_err}")
                     return all_channels_list if all_channels_list else None
 
             if not all_channels_list:
-                print("No channels found on the instance (or error fetching for admin/mod).")
+                print("No channels found for admin/moderator.")
             return all_channels_list
-        else: # Regular user or role undetermined (defaulting to regular user behavior)
-            print(f"User is regular or role undetermined (Role: {self.user_role_id}). Fetching own channels via /users/me again (or cached).")
-            # Re-fetch /users/me to get the 'videoChannels' array for this user
-            # This might be slightly redundant if _fetch_user_details was just called,
-            # but ensures `user_info` is fresh for this specific path.
-            # A more optimized way would be to pass user_info from _fetch_user_details if available.
-            response_me_user = None
-            try {
-                response_me_user = requests.get(f"{self.instance_url}/api/v1/users/me", headers=headers)
-                response_me_user.raise_for_status()
-                user_info_for_channels = response_me_user.json()
 
-                channels_data = user_info_for_channels.get('videoChannels', [])
-                formatted_channels = []
-                # Use self.username if available, otherwise try to get from this specific /users/me call
-                owner_name = self.username if self.username else user_info_for_channels.get('account', {}).get('name', 'self')
-                for ch in channels_data:
-                    formatted_channels.append({
+        else:
+            # Regular user: Fetch own channels
+            print(f"User is regular or role undetermined (Role: {self.user_role_id}). Fetching own channels...")
+            response_me_user = None # Initialize for the except block
+            try: # Corrected: removed '{'
+                url = f"{self.instance_url}/api/v1/users/me"
+                response_me_user = requests.get(url, headers=headers)
+                response_me_user.raise_for_status()
+                user_info = response_me_user.json()
+
+                channels_data = user_info.get('videoChannels', [])
+                owner_name = self.username or user_info.get('account', {}).get('name', 'self')
+
+                formatted_channels = [
+                    {
                         'id': ch.get('id'),
                         'displayName': ch.get('displayName'),
                         'name': ch.get('name'),
                         'ownerAccountName': owner_name
-                    })
+                    } for ch in channels_data
+                ]
+
                 if not formatted_channels:
-                     print("No channels found for this user (from /users/me).")
+                    print("No channels found for this user.")
                 return formatted_channels
-            } except requests.exceptions.HTTPError as http_err:
-                err_text = http_err.response.text if http_err.response is not None else "No response body"
-                print(f"HTTP error fetching user's own channels: {http_err}. Response: {err_text}")
+
+            except requests.exceptions.HTTPError as http_err:
+                err_text = http_err.response.text if http_err.response else "No response body"
+                print(f"HTTP error fetching user's channels: {http_err}. Response: {err_text}")
                 return None
-            except requests.exceptions.RequestException as e:
-                print(f"Error fetching user's own channels: {e}")
+            except requests.exceptions.RequestException as req_err:
+                print(f"Error fetching user's channels: {req_err}")
                 return None
             except json.JSONDecodeError as json_err:
-                resp_text = response_me_user.text if response_me_user is not None else "N/A"
-                status_code = response_me_user.status_code if response_me_user is not None else "N/A"
-                print(f"Error decoding JSON for user's own channels. Status: {status_code}. Text: '{resp_text}'. Error: {json_err}")
+                resp_text = response_me_user.text if response_me_user else "N/A"
+                status_code = response_me_user.status_code if response_me_user else "N/A"
+                print(f"JSON decode error for user's channels. Status: {status_code}. Response: '{resp_text}'. Error: {json_err}")
                 return None
 
     def upload_video_resumable_init(self, channel_id, file_path, video_name, video_description="", privacy=1, nsfw=False, tags=None):
