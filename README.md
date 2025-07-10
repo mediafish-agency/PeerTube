@@ -113,8 +113,10 @@ PyInstaller is used to create standalone executables. The necessary Python packa
 4.  Enter your PeerTube username and password when prompted by dialog boxes.
 5.  If authentication is successful, your channels will be loaded into the "Channel" dropdown.
 6.  Click "Browse" to select a video file you want to upload.
-7.  Select the desired channel from the dropdown. The channel ID will be used for the upload.
-8.  Enter a title for your video.
+    *   Select the desired channel from the dropdown.
+        *   **Regular Users:** Will see only their own channels.
+        *   **Administrators/Moderators:** Will see all channels on the instance. Channels not owned by them will be indicated with an "(Owner: <owner_username>)" suffix.
+    *   Enter a title for your video (must be between 3 and 120 characters).
 9.  Click "Add to Upload Queue". The video will be added to the queue list, showing its title, channel, and initial "Pending" status.
 10. The application will automatically start processing the queue. The status of the current task will change to "Initializing", then "Uploading", and its progress bar will update.
 11. Upon completion, the task status will show "Completed" (and turn green) or "Failed" (and turn red with an error message).
@@ -126,13 +128,18 @@ PyInstaller is used to create standalone executables. The necessary Python packa
 
 The initial requirement stated: "The user should be able to upload videos to any channel, even if they do not own it."
 
-The current implementation of the PeerTube API client (`get_channels` method) fetches channels associated with the *authenticated user's account*. Standard PeerTube permissions typically restrict uploads to channels owned by the authenticated user or where they have explicit rights (e.g., as a channel manager if the API supports such roles for uploads, which needs verification).
+**Behavior for Admin/Moderator Roles:**
+*   If the authenticated user is an **Administrator** or **Moderator** on the PeerTube instance (as determined by their role ID), the "Channel" dropdown will list **all channels** available on that instance.
+*   For channels not owned by the admin/moderator, the display will typically include "(Owner: <owner_username>)" for clarity.
 
-Uploading to a channel not owned by the user would generally require:
-1.  The PeerTube instance to be configured to allow such uploads (unlikely for public instances due to security and moderation concerns).
-2.  Or, the authenticated user to have specific administrative or moderator privileges on the target PeerTube instance that grant them permission to upload to other users' channels. The standard API endpoints used (`/api/v1/users/me` to list channels, and `/api/v1/videos/upload-resumable` with a `channelId`) assume the `channelId` provided is one the user has rights to upload to.
+**Behavior for Regular Users:**
+*   If the authenticated user is a **regular user**, the "Channel" dropdown will only list channels **owned by that user**.
 
-This application, as implemented, will list and allow uploads to channels *owned by (or directly manageable by) the authenticated user*. If uploading to truly arbitrary/unowned channels is a strict requirement, the PeerTube instance itself must be configured to support this, and the API interaction might need adjustment if specific API calls are needed for such privileged operations (which are not standard for regular users). The current API usage for uploading is standard for a user uploading to their own/managed channels.
+**Important Note on Upload Permissions:**
+*   Listing a channel in the dropdown (especially for Admins/Moderators viewing channels they don't own) **does not automatically guarantee permission to upload to it.**
+*   The actual ability to upload to a selected channel is determined by the PeerTube server based on the authenticated user's rights for that specific channel.
+*   If an Admin or Moderator attempts to upload to a channel they can see but do not have explicit upload permissions for (as configured on the PeerTube server), the upload attempt will likely fail with an error from the server (e.g., a 403 Forbidden error). The application will report this failure.
+*   Standard PeerTube permissions typically restrict direct uploads to channels a user owns or explicitly manages. Uploading to *any* arbitrary channel usually requires specific server-side configurations or permissions that are not standard for all moderator roles across all instances.
 
 ## Future Improvements
 

@@ -227,8 +227,33 @@ class MainWindow(QMainWindow):
             if channels_data:
                 self.channel_combo.addItem("--- Select a Channel ---")
                 for channel in channels_data:
-                    self.user_channels.append({'id': channel['id'], 'displayName': channel['displayName'], 'name': channel['name']})
-                    self.channel_combo.addItem(f"{channel['displayName']} (Handle: {channel['name']})", channel['id']) # Store ID as item data
+                    # Store necessary channel info, including owner for display logic
+                    self.user_channels.append({
+                        'id': channel['id'],
+                        'displayName': channel['displayName'],
+                        'name': channel['name'], # channel handle
+                        'ownerAccountName': channel.get('ownerAccountName', 'N/A')
+                    })
+
+                    display_text = f"{channel['displayName']} (Handle: {channel['name']})"
+                    # Add owner info if it's an admin/mod looking at other's channels
+                    # self.peertube_client.username is the authenticated user's account name (e.g. 'root')
+                    # channel['ownerAccountName'] might be 'root@peertube_instance' or just 'anotheruser'
+                    # We need to compare the core part of the account name.
+
+                    owner_display = channel.get('ownerAccountName', 'N/A')
+                    is_own_channel = False
+                    if self.peertube_client and self.peertube_client.username:
+                        # ownerAccountName can be 'user' or 'user@domain'. Authenticated username is usually just 'user'.
+                        if owner_display == self.peertube_client.username or \
+                           owner_display.startswith(self.peertube_client.username + "@"):
+                           is_own_channel = True
+
+                    if (self.peertube_client and self.peertube_client.user_role_id in [0, 1]) and not is_own_channel and owner_display != 'N/A':
+                        display_text += f" (Owner: {owner_display})"
+
+                    self.channel_combo.addItem(display_text, channel['id']) # Store ID as item data
+
                 self.channel_combo.setEnabled(True)
                 self.log_message(f"Loaded {len(channels_data)} channels.")
                 self.show_status_message(f"Loaded {len(channels_data)} channels.", 3000)

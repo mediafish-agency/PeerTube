@@ -1,9 +1,6 @@
 import requests
 import json
-import os # For potential future token storage/retrieval
-
-# Define a constant for the token file if we decide to store it
-# TOKEN_FILE = os.path.expanduser("~/.peertube_uploader_token.json")
+import os
 
 class PeerTubeClient:
     def __init__(self, instance_url):
@@ -11,13 +8,11 @@ class PeerTubeClient:
         self.access_token = None
         self.client_id = None
         self.client_secret = None
-        self.token_expires_at = 0 # Placeholder for token expiry
+        self.token_expires_at = 0
+        self.user_role_id = None # Default to unknown/regular user (e.g. 2)
+        self.username = None # Store the username of the authenticated user account
 
     def _get_oauth_client_creds(self):
-        """
-        Retrieves client_id and client_secret for OAuth.
-        These are typically fixed for a given PeerTube instance for client apps.
-        """
         try:
             response = requests.get(f"{self.instance_url}/api/v1/oauth-clients/local")
             response.raise_for_status()
@@ -25,19 +20,14 @@ class PeerTubeClient:
             self.client_id = creds.get("client_id")
             self.client_secret = creds.get("client_secret")
             if not self.client_id or not self.client_secret:
-                # Log error or raise an exception
                 print("Error: Could not retrieve client_id and client_secret.")
                 return False
             return True
         except requests.exceptions.RequestException as e:
             print(f"Error getting OAuth client credentials: {e}")
-            # Potentially log this to the GUI log area
             return False
 
     def authenticate(self, username, password, otp_token=None):
-        """
-        Authenticates with the PeerTube instance to get an access token.
-        """
         if not self._get_oauth_client_creds():
             return False
 
@@ -46,7 +36,7 @@ class PeerTubeClient:
             'client_id': self.client_id,
             'client_secret': self.client_secret,
             'grant_type': 'password',
-            'response_type': 'code', # As per some client examples, though 'token' might also work
+            'response_type': 'code',
             'username': username,
             'password': password
         }
@@ -54,151 +44,204 @@ class PeerTubeClient:
         if otp_token:
             headers['x-peertube-otp'] = otp_token
 
+        response = None
         try:
             response = requests.post(token_url, data=payload, headers=headers)
-            response.raise_for_status()  # Raises an HTTPError for bad responses (4XX or 5XX)
-
+            response.raise_for_status()
             token_data = response.json()
             self.access_token = token_data.get('access_token')
-
             if not self.access_token:
                 print("Error: Authentication failed, no access token received.")
-                # Potentially update GUI log
                 return False
-
-            print(f"Successfully authenticated. Access token: {self.access_token[:20]}...") # Log part of token for verification
-            # Store token expiry if available (token_data.get('expires_in')) and handle refresh later
+            print(f"Successfully authenticated. Access token: {self.access_token[:20]}...")
+            # After getting token, fetch user details to get role
+            if not self._fetch_user_details(): # Separate method to get user role
+                print("Warning: Authentication token obtained, but failed to fetch user details and role.")
+                # Decide if this is a hard fail or proceed with unknown role
             return True
-
         except requests.exceptions.HTTPError as http_err:
             print(f"HTTP error during authentication: {http_err}")
-            if response.status_code == 400:
-                print(f"Response body: {response.text}") # Often contains useful error details
-                # Specific error for incorrect credentials or OTP
-                if "invalid_grant" in response.text:
-                     print("Error: Invalid username, password, or OTP.")
-                elif "invalid_request" in response.text and "OTP" in response.text : # Approximation
-                     print("Error: OTP token might be required or is incorrect.")
-            # Update GUI log with specific error
+            if http_err.response is not None:
+                print(f"Response body: {http_err.response.text}")
+                if http_err.response.status_code == 400:
+                    if "invalid_grant" in http_err.response.text:
+                        print("Error: Invalid username, password, or OTP.")
+                    elif "invalid_request" in http_err.response.text and "OTP" in http_err.response.text:
+                        print("Error: OTP token might be required or is incorrect.")
             return False
         except requests.exceptions.RequestException as e:
-            print(f"Error during authentication: {e}")
-            # Update GUI log
+            print(f"Error during authentication (RequestException): {e}")
             return False
-        except json.JSONDecodeError:
-            print(f"Error decoding JSON response from token endpoint: {response.text}")
+        except json.JSONDecodeError as json_err:
+            resp_text = response.text if response is not None else "N/A"
+            status = response.status_code if response is not None else "N/A"
+            print(f"Error decoding JSON from token endpoint. Status: {status}. Text: '{resp_text}'. Error: {json_err}")
             return False
 
-
-    def get_channels(self):
-        """
-        Fetches a list of video channels for the authenticated user or public channels.
-        For this application, we need channels the user can upload to.
-        This usually means channels owned by the user.
-        """
+    def _fetch_user_details(self):
         if not self.access_token:
-            print("Error: Not authenticated. Cannot fetch channels.")
-            # Update GUI: "Please authenticate first"
-            return None
-
-        # Endpoint to get channels of the current user
-        # Based on docs: /api/v1/users/me then parse videoChannels
-        # Or more directly: /api/v1/video-channels can be filtered by user if user is admin,
-        # but for a regular user, /api/v1/users/me and then iterating its videoChannels array is more reliable.
-        # Let's try /api/v1/users/me first.
+            print("Error: Cannot fetch user details, no access token.")
+            return False
 
         me_url = f"{self.instance_url}/api/v1/users/me"
-        headers = {
-            'Authorization': f'Bearer {self.access_token}'
-        }
-
+        headers = {'Authorization': f'Bearer {self.access_token}'}
+        response = None
         try:
             response = requests.get(me_url, headers=headers)
             response.raise_for_status()
             user_info = response.json()
-
-            # videoChannels is an array of channel objects associated with the user
-            channels = user_info.get('videoChannels', [])
-
-            # We need channel name (for display) and channelId (for upload API)
-            # The API returns channel handle as 'name' and display name as 'displayName'
-            # The ID is 'id'
-            formatted_channels = []
-            for ch in channels:
-                formatted_channels.append({
-                    'id': ch.get('id'),
-                    'displayName': ch.get('displayName'),
-                    'name': ch.get('name') # This is the handle
-                })
-
-            if not formatted_channels:
-                 print("No channels found for this user or user has no channels.")
-            return formatted_channels
-
+            self.user_role_id = user_info.get('role', {}).get('id')
+            # The 'account' object within /users/me contains the main account details like username
+            self.username = user_info.get('account', {}).get('name')
+            print(f"Fetched user details: User: {self.username}, Role ID: {self.user_role_id}")
+            return True
+        except requests.exceptions.HTTPError as http_err:
+            err_text = http_err.response.text if http_err.response is not None else "No response body"
+            print(f"HTTP error fetching user details (/users/me): {http_err}. Response: {err_text}")
+            return False
         except requests.exceptions.RequestException as e:
-            print(f"Error fetching channels: {e}")
-            # Update GUI log
+            print(f"Error fetching user details (/users/me): {e}")
+            return False
+        except json.JSONDecodeError as json_err:
+            resp_text = response.text if response is not None else "N/A"
+            status_code = response.status_code if response is not None else "N/A"
+            print(f"Error decoding JSON for user details (/users/me). Status: {status_code}. Text: '{resp_text}'. Error: {json_err}")
+            return False
+
+    def get_channels(self):
+        if not self.access_token:
+            print("Error: Not authenticated. Cannot fetch channels.")
             return None
-        except json.JSONDecodeError:
-            print(f"Error decoding JSON response from user info endpoint: {response.text}")
-            return None
+
+        # Ensure user details (including role) are fetched if not already
+        if self.user_role_id is None and self.username is None:
+            if not self._fetch_user_details():
+                print("Failed to fetch user details, cannot determine channel list strategy.")
+                return None # Or return empty list, or raise error
+
+        headers = {'Authorization': f'Bearer {self.access_token}'}
+
+        # Role IDs: 0 for Admin, 1 for Moderator, 2 for User
+        if self.user_role_id == 0 or self.user_role_id == 1:
+            print(f"User is Admin/Moderator (Role: {self.user_role_id}). Fetching all video channels.")
+            all_channels_list = []
+            start = 0
+            count = 50
+            total_expected = -1
+
+            while True:
+                all_channels_url = f"{self.instance_url}/api/v1/video-channels?start={start}&count={count}&sort=-createdAt"
+                response_ch = None
+                try:
+                    response_ch = requests.get(all_channels_url, headers=headers)
+                    response_ch.raise_for_status()
+                    page_data = response_ch.json()
+
+                    page_channels = page_data.get('data', [])
+                    if total_expected == -1:
+                        total_expected = page_data.get('total', 0)
+
+                    if not page_channels:
+                        break
+
+                    for ch in page_channels:
+                        owner_account_info = ch.get('ownerAccount', {})
+                        all_channels_list.append({
+                            'id': ch.get('id'),
+                            'displayName': ch.get('displayName'),
+                            'name': ch.get('name'),
+                            'ownerAccountName': owner_account_info.get('name', 'N/A')
+                        })
+
+                    if total_expected == 0 or len(all_channels_list) >= total_expected or len(page_channels) < count:
+                        break
+                    start += count
+
+                except requests.exceptions.HTTPError as http_err_ch:
+                    err_text_ch = http_err_ch.response.text if http_err_ch.response is not None else "No response body"
+                    print(f"HTTP error fetching all channels page: {http_err_ch}. Response: {err_text_ch}")
+                    return all_channels_list if all_channels_list else None
+                except requests.exceptions.RequestException as e_ch:
+                    print(f"Error fetching all channels page: {e_ch}")
+                    return all_channels_list if all_channels_list else None
+                except json.JSONDecodeError as json_err_ch:
+                    resp_text_ch = response_ch.text if response_ch is not None else "N/A"
+                    status_code_ch = response_ch.status_code if response_ch is not None else "N/A"
+                    print(f"Error decoding JSON for all channels page. Status: {status_code_ch}. Text: '{resp_text_ch}'. Error: {json_err_ch}")
+                    return all_channels_list if all_channels_list else None
+
+            if not all_channels_list:
+                print("No channels found on the instance (or error fetching for admin/mod).")
+            return all_channels_list
+        else: # Regular user or role undetermined (defaulting to regular user behavior)
+            print(f"User is regular or role undetermined (Role: {self.user_role_id}). Fetching own channels via /users/me again (or cached).")
+            # Re-fetch /users/me to get the 'videoChannels' array for this user
+            # This might be slightly redundant if _fetch_user_details was just called,
+            # but ensures `user_info` is fresh for this specific path.
+            # A more optimized way would be to pass user_info from _fetch_user_details if available.
+            response_me_user = None
+            try {
+                response_me_user = requests.get(f"{self.instance_url}/api/v1/users/me", headers=headers)
+                response_me_user.raise_for_status()
+                user_info_for_channels = response_me_user.json()
+
+                channels_data = user_info_for_channels.get('videoChannels', [])
+                formatted_channels = []
+                # Use self.username if available, otherwise try to get from this specific /users/me call
+                owner_name = self.username if self.username else user_info_for_channels.get('account', {}).get('name', 'self')
+                for ch in channels_data:
+                    formatted_channels.append({
+                        'id': ch.get('id'),
+                        'displayName': ch.get('displayName'),
+                        'name': ch.get('name'),
+                        'ownerAccountName': owner_name
+                    })
+                if not formatted_channels:
+                     print("No channels found for this user (from /users/me).")
+                return formatted_channels
+            } except requests.exceptions.HTTPError as http_err:
+                err_text = http_err.response.text if http_err.response is not None else "No response body"
+                print(f"HTTP error fetching user's own channels: {http_err}. Response: {err_text}")
+                return None
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching user's own channels: {e}")
+                return None
+            except json.JSONDecodeError as json_err:
+                resp_text = response_me_user.text if response_me_user is not None else "N/A"
+                status_code = response_me_user.status_code if response_me_user is not None else "N/A"
+                print(f"Error decoding JSON for user's own channels. Status: {status_code}. Text: '{resp_text}'. Error: {json_err}")
+                return None
 
     def upload_video_resumable_init(self, channel_id, file_path, video_name, video_description="", privacy=1, nsfw=False, tags=None):
-        """
-        Initializes a resumable video upload.
-        API: POST /api/v1/videos/upload-resumable
-        """
         if not self.access_token:
             print("Error: Not authenticated for resumable upload init.")
             return None
-
         if not os.path.exists(file_path):
             print(f"Error: File not found at {file_path}")
             return None
 
         file_size = os.path.getsize(file_path)
-        # Basic MIME type detection, can be improved
-        mime_type = "video/mp4" # Default, make more robust if needed
-        if file_path.lower().endswith(".mkv"):
-            mime_type = "video/x-matroska"
-        elif file_path.lower().endswith(".avi"):
-            mime_type = "video/x-msvideo"
-        elif file_path.lower().endswith(".mov"):
-            mime_type = "video/quicktime"
-        elif file_path.lower().endswith(".webm"):
-            mime_type = "video/webm"
-
+        mime_type = "video/mp4"
+        if file_path.lower().endswith(".mkv"): mime_type = "video/x-matroska"
+        elif file_path.lower().endswith(".avi"): mime_type = "video/x-msvideo"
+        elif file_path.lower().endswith(".mov"): mime_type = "video/quicktime"
+        elif file_path.lower().endswith(".webm"): mime_type = "video/webm"
 
         upload_url = f"{self.instance_url}/api/v1/videos/upload-resumable"
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'X-Upload-Content-Length': str(file_size),
             'X-Upload-Content-Type': mime_type,
-            'Content-Type': 'application/json' # Body is JSON for init
+            'Content-Type': 'application/json'
         }
-
         payload = {
-            "channelId": channel_id,
-            "name": video_name,
-            "filename": os.path.basename(file_path), # Required for resumable
-            "privacy": privacy, # 1: Public, 2: Unlisted, 3: Private, 4: Internal
-            "nsfw": nsfw,
-            # "waitTranscoding": True, # Optional
-            # "generateTranscription": False # Optional
+            "channelId": channel_id, "name": video_name,
+            "filename": os.path.basename(file_path), "privacy": privacy, "nsfw": nsfw
         }
-        if video_description: # Only add description if it's not empty
-            payload["description"] = video_description
-        else:
-            # If description is empty, PeerTube might prefer it to be omitted or explicitly null.
-            # For now, omitting if empty. If API requires it, this needs to be handled differently (e.g. default value or GUI enforcement)
-            # Based on the error, "Invalid value" for empty string suggests omitting or sending null might be better.
-            # Let's try omitting first. If server complains, then try sending "description": None (or null in JSON)
-            pass
+        if video_description: payload["description"] = video_description
+        if tags: payload["tags"] = tags
 
-        if tags:
-            payload["tags"] = tags
-
-        response = None # Ensure response is defined for all paths in except blocks
+        response = None
         upload_data = None
         try:
             print(f"Initializing resumable upload for {video_name} to channel {channel_id}")
@@ -210,11 +253,9 @@ class PeerTubeClient:
                 upload_data = response.json()
             except json.JSONDecodeError as json_err_inner:
                 print(f"CRITICAL: JSONDecodeError immediately after request. Status: {response.status_code}. Response Text: '{response.text}'")
-                if not (200 <= response.status_code < 300): # If not a success code, raise to outer HTTPError handler
+                if not (200 <= response.status_code < 300):
                     response.raise_for_status()
-                # If it was 200/201 but empty body, upload_data remains None, handled below.
                 print(f"Note: JSONDecodeError means upload_data is None. Error: {json_err_inner}")
-
 
             if response.status_code == 201:
                 location_header = response.headers.get('Location')
@@ -247,13 +288,13 @@ class PeerTubeClient:
                 print(f"Resumable upload session found/resumed (200). Upload ID: {upload_id}")
                 return {"upload_id": upload_id, "file_size": file_size, "video_data": upload_data.get("video")}
 
-            else: # Other non-200/201 codes
+            else:
                 print(f"Upload init failed with status {response.status_code}. Body: '{response.text}'")
-                response.raise_for_status() # Raise HTTPError to be caught below
+                response.raise_for_status()
 
         except requests.exceptions.HTTPError as http_err:
             print(f"HTTP error in resumable_init: {http_err}")
-            if http_err.response is not None and not upload_data : # if upload_data (from response.json()) is None, print raw text
+            if http_err.response is not None and not upload_data :
                  print(f"Raw HTTPError response text: {http_err.response.text}")
             return None
         except requests.exceptions.RequestException as e:
@@ -261,26 +302,22 @@ class PeerTubeClient:
             if hasattr(e, 'response') and e.response is not None:
                 print(f"Underlying response status: {e.response.status_code}. Text: '{e.response.text}'")
             return None
-        # Outer json.JSONDecodeError should not be hit if inner one is handled, but as a fallback.
-        except json.JSONDecodeError as json_err_outer:
+        except json.JSONDecodeError as json_err_outer: # Fallback
             status = response.status_code if response is not None else "N/A"
             text = response.text if response is not None else "No response"
             print(f"Outer JSONDecodeError in resumable_init. Status: {status}. Text: '{text}'. Error: {json_err_outer}")
             return None
-        return None # Should be unreachable if all paths return
+        return None
 
 
     def upload_video_chunk(self, upload_id, file_path, chunk_start, chunk_size, total_size, progress_callback=None):
-        """
-        Uploads a chunk of the video file for resumable upload.
-        API: PUT /api/v1/videos/upload-resumable?upload_id=<upload_id>
-        """
         if not self.access_token:
             print("Error: Not authenticated for chunk upload.")
             return {"status": "error", "message": "Not authenticated."}
 
         upload_url = f"{self.instance_url}/api/v1/videos/upload-resumable?upload_id={upload_id}"
 
+        data_chunk = None
         try:
             with open(file_path, 'rb') as f:
                 f.seek(chunk_start)
@@ -289,12 +326,9 @@ class PeerTubeClient:
             print(f"Error reading file chunk: {e}")
             return {"status": "error", "message": str(e)}
 
-        if not data_chunk and chunk_start < total_size: # Check if not at EOF for empty chunk
-            print("Warning: Attempting to upload an empty chunk before EOF.")
-            # This might be okay for final confirmation or zero-byte files if total_size is 0.
-            # If total_size > 0 and chunk_start < total_size, an empty data_chunk is an issue.
-            return {"status": "error", "message": "Read empty chunk before EOF"}
-
+        if not data_chunk and chunk_start < total_size:
+             print(f"Error: Read empty chunk from {file_path} at offset {chunk_start} but not at EOF.")
+             return {"status": "error", "message": "Read empty chunk before EOF"}
 
         headers = {
             'Authorization': f'Bearer {self.access_token}',
@@ -308,51 +342,43 @@ class PeerTubeClient:
         try:
             response = requests.put(upload_url, headers=headers, data=data_chunk)
 
-            if response.status_code == 204: # Chunk successfully received.
+            if response.status_code == 204:
                 if progress_callback:
                     progress_callback(len(data_chunk))
                 return {"status": "chunk_uploaded"}
 
-            elif response.status_code == 200: # Can also mean final chunk processed by some PeerTube versions.
+            elif response.status_code == 200:
                 if progress_callback:
                     progress_callback(len(data_chunk))
-
                 video_info = None
                 try:
-                    # Some PeerTube versions might return video info in the body of a 200 for the final chunk.
                     video_info = response.json().get("video")
                     print("Final chunk uploaded and video processed (200 OK with JSON body).")
                 except json.JSONDecodeError:
-                    # Or it might be a 200 OK with an empty body, just confirming completion.
                     print("Final chunk uploaded (200 OK, empty/non-JSON body). Assuming complete.")
                 return {"status": "complete", "video_info": video_info}
 
-            elif response.status_code == 308: # Resume Incomplete - Standard TUS response.
+            elif response.status_code == 308:
                  print(f"Server responded with 308 Resume Incomplete. Headers: {response.headers}")
-                 # A robust client would now make a HEAD request to the Location URL from init
-                 # to get the server's `Upload-Offset` and resume from there.
-                 # For this client, we assume sequential uploads are fine if no error.
-                 if progress_callback: # Assume chunk was processed if 308 without error body
+                 if progress_callback:
                     progress_callback(len(data_chunk))
                  return {"status": "chunk_uploaded", "needs_offset_check": True}
             else:
-                # Any other status code indicates an error for this chunk.
                 print(f"Chunk upload failed with status: {response.status_code}. Response: '{response.text}'")
-                response.raise_for_status() # Raise HTTPError for 4xx/5xx to be caught below.
+                response.raise_for_status()
 
         except requests.exceptions.HTTPError as http_err:
             print(f"HTTP error uploading chunk: {http_err}")
             err_resp_text = http_err.response.text if http_err.response is not None else "No response body"
             print(f"Response content: {err_resp_text}")
             return {"status": "error", "message": f"HTTP Error: {str(http_err)} - {err_resp_text}"}
-        except requests.exceptions.RequestException as e: # Network errors, DNS, connection refused etc.
+        except requests.exceptions.RequestException as e:
             print(f"Network/Request error uploading chunk: {e}")
             return {"status": "error", "message": f"RequestException: {str(e)}"}
-        except Exception as e: # Catch any other unexpected error during chunk processing
+        except Exception as e:
             print(f"Unexpected error during chunk upload: {e}")
             return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
-        # Fallback if no other condition was met (should be rare)
         return {"status": "error", "message": "Unknown error after chunk upload attempt."}
 
 
