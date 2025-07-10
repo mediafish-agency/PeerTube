@@ -1,188 +1,147 @@
-<h1 align="center">
-  <a href="https://joinpeertube.org">
-    <img src="https://joinpeertube.org/img/brand.png" alt="PeerTube">
-  </a>
-</h1>
+# PeerTube Uploader Desktop Application
 
-<p align=center>
-  <strong><a href="https://joinpeertube.org">Website</a></strong>
-  | <strong><a href="https://joinpeertube.org/instances">Join an instance</a></strong>
-  | <strong><a href="https://github.com/Chocobozzz/PeerTube/blob/develop/README.md#package-create-your-own-instance">Create an instance</a></strong>
-  | <strong><a href="https://github.com/Chocobozzz/PeerTube/blob/develop/README.md#contact">Chat with us</a></strong>
-  | <strong><a href="https://framasoft.org/en/#soutenir">Donate</a></strong>
-</p>
+A desktop application for Windows and Ubuntu to upload videos to a PeerTube instance.
 
-<p align="center">
-Be part of a network of multiple small federated, interoperable video hosting providers. Follow video creators and create videos. No vendor lock-in. All on a platform that is community-owned and ad-free.
-</p>
+## Features
 
-<p align="center">
-  <strong>Developed with &#10084; by <a href="https://framasoft.org">Framasoft</a></strong>
-</p>
+*   Select video files from the local hard drive.
+*   Connect to a specified PeerTube instance and authenticate.
+*   Fetch and choose from your available PeerTube channels.
+*   Enter a title for the video.
+*   Add videos to an upload queue.
+*   Automatic sequential uploading of videos from the queue.
+*   Progress display for ongoing uploads.
+*   Logging of application activity and upload status.
 
-<p align="center">
-  <a href="https://framasoft.org">
-    <img width="150px" src="https://lutim.cpy.re/FeRgHH8r.png" alt="Framasoft logo"/>
-  </a>
-</p>
+## Technology Stack
 
-<div align="center">
-  <a href="https://github.com/Chocobozzz/PeerTube/actions?query=workflow%3A%22Test%22+branch%3Adevelop">
-    <img src="https://github.com/Chocobozzz/PeerTube/workflows/Test/badge.svg" alt="GitHub Test Status">
-  </a>
+*   Python 3
+*   PyQt5 for the graphical user interface.
+*   Requests library for HTTP communication with the PeerTube API.
+*   PyInstaller for packaging into standalone executables.
 
-  <a href="https://automate.browserstack.com/public-build/d0ZMeGpSUFRjaUpDNnN3NUdKY1l2TnNpTGVJaUI0bm9hYkNxMTRtQ1lHTT0tLVZQa2crbFB1c2RDZUl1Y1Blck02SFE9PQ==--5f956d6857c50e06a0b7b1fe405fb93d0f2d0e11%">
-    <img src="https://automate.browserstack.com/badge.svg?badge_key=d0ZMeGpSUFRjaUpDNnN3NUdKY1l2TnNpTGVJaUI0bm9hYkNxMTRtQ1lHTT0tLVZQa2crbFB1c2RDZUl1Y1Blck02SFE9PQ==--5f956d6857c50e06a0b7b1fe405fb93d0f2d0e11%" alt="BrowserStack Status">
-  </a>
+## Project Structure
 
-  <a href="https://weblate.framasoft.org/projects/peertube/angular/">
-    <img src="https://weblate.framasoft.org/widgets/peertube/-/angular/svg-badge.svg" alt="Weblate Status">
-  </a>
-</div>
+```
+peertube_uploader/
+├── main.py               # Main application entry point
+├── gui/
+│   ├── main_window.py    # PyQt main window class and GUI logic
+│   └── widgets/          # Custom GUI widgets (if any, currently empty)
+├── api/
+│   └── peertube_client.py # Class for PeerTube API interactions
+├── core/
+│   └── queue_manager.py  # Upload queue logic and task management
+├── config/               # Configuration handling (if any persisted, currently empty)
+├── assets/               # Icons, etc. (currently empty)
+└── utils/                # Utility functions (currently empty)
+build.sh                  # Script to build the application using PyInstaller (for Linux)
+requirements.txt          # Python dependencies
+README.md                 # This file (specific to the uploader app)
+.gitignore                # Specifies intentionally untracked files
+```
+*(Other files in the root like LICENSE, CHANGELOG.md etc. might be from the original PeerTube project if this uploader is built within its structure)*
 
-<br />
+## Setup and Running from Source
 
-<p align="center">
-  <a href="https://framatube.org/videos/watch/217eefeb-883d-45be-b7fc-a788ad8507d3">
-    <img src="https://lutim.cpy.re/9CLXh0Ys.png" alt="screenshot" />
-  </a>
-</p>
+1.  **Clone the repository (or ensure you have the `peertube_uploader` directory and other necessary files like `build.sh`, `requirements.txt`).**
 
-Introduction
-----------------------------------------------------------------
+2.  **Ensure Python 3 is installed.**
+    You can download it from [python.org](https://www.python.org/).
 
-PeerTube is a free, decentralized and federated video platform developed as an alternative to other platforms that centralize our data and attention, such as YouTube, Dailymotion or Vimeo. :clapper:
+3.  **Create a virtual environment (recommended):**
+    ```bash
+    python3 -m venv venv_uploader
+    source venv_uploader/bin/activate  # On Windows: venv_uploader\Scripts\activate
+    ```
 
-To learn more:
-* This [two-minute video](https://framatube.org/videos/watch/217eefeb-883d-45be-b7fc-a788ad8507d3) (hosted on PeerTube) explaining what PeerTube is and how it works
-* PeerTube's project homepage, [joinpeertube.org](https://joinpeertube.org)
-* Demonstration instances:
-  * [peertube.cpy.re](https://peertube.cpy.re) (stable)
-  * [peertube2.cpy.re](https://peertube2.cpy.re) (Nightly)
-  * [peertube3.cpy.re](https://peertube3.cpy.re) (RC)
-* This [video](https://peertube.cpy.re/videos/watch/da2b08d4-a242-4170-b32a-4ec8cbdca701) demonstrating the communication between PeerTube and [Mastodon](https://github.com/tootsuite/mastodon) (a decentralized Twitter alternative)
+4.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-:sparkles: Features
-----------------------------------------------------------------
+5.  **Run the application:**
+    ```bash
+    python peertube_uploader/main.py
+    ```
 
-<p align=center>
-  <strong><a href="https://joinpeertube.org/faq#what-are-the-peertube-features-for-viewers">All features for viewers</a></strong>
-  | <strong><a href="https://joinpeertube.org/faq#what-are-the-peertube-features-for-content-creators">All features for content creators</a></strong>
-  | <strong><a href="https://joinpeertube.org/faq#what-are-the-peertube-features-for-administrators">All features for administrators</a></strong>
-</p>
+## Building Standalone Executables
 
-<img src="https://lutim.cpy.re/AHbctLjn.png" align="left" height="300px"/>
-<h3 align="left">Video streaming, even in live!</h3>
-<p align="left">
-Just upload your videos, and be sure they will stream anywhere. Add a description, some tags and your video will be discoverable by the entire video fediverse, not just your instance. You can even embed a player on your favorite website!
-</p>
-<p align="left">
-You are used to hosting live events? We got you covered too! Start livestreaming from your favorite client, and even host permanent streams!
-</p>
+PyInstaller is used to create standalone executables. The necessary Python packages (PyQt5, requests) will be bundled.
 
----
+### For Linux:
 
-<img src="https://lutim.cpy.re/cxWccUK7.png" align="right" height="200px"/>
+1.  **Ensure PyInstaller is installed** (it's in `requirements.txt`).
+2.  **Make the build script executable:**
+    ```bash
+    chmod +x build.sh
+    ```
+3.  **Run the build script from the project root directory:**
+    ```bash
+    ./build.sh
+    ```
+    The executable will be located in the `dist/PeerTubeUploader/` directory (e.g., `dist/PeerTubeUploader/PeerTubeUploader`).
 
-<h3 align="right">Keep in touch with video creators</h3>
-<p align="right">
-Follow your favorite channels from PeerTube or really any other place. No need to have an account on the instance you watched a video to follow its author, you can do all of that from the Fediverse (Mastodon, Pleroma, and plenty others), or just with good ol' RSS.
-</p>
+    **Note on Debian (.deb) Packaging:**
+    The `build.sh` script also contains *illustrative manual steps* for creating a `.deb` package after the PyInstaller build. This involves creating a specific directory structure, a `.desktop` file for application launchers, and a `DEBIAN/control` file. For robust Debian packaging, consider using tools like `fpm` or `debhelper`. The script lists common Qt5 dependencies that might be needed for the control file.
 
----
+### For Windows:
 
-<img src="https://lutim.cpy.re/K07EhFbt.png" align="left" height="200px"/>
+1.  **Ensure Python 3, PyQt5, Requests, and PyInstaller are installed** in your Windows environment.
+    ```bash
+    pip install pyqt5 requests pyinstaller
+    ```
+2.  **Open a Command Prompt or PowerShell in the project root directory.**
+3.  **Run the PyInstaller command directly** (you can adapt it from the `build.sh` script, ensuring paths are correct for Windows):
+    ```powershell
+    pyinstaller --name "PeerTubeUploader" --onefile --windowed --distpath "dist" --workpath "build_pyinstaller" peertube_uploader/main.py
+    ```
+    (Add `--icon="path\to\your\icon.ico"` if you have an icon file for the executable).
+    The executable (`PeerTubeUploader.exe`) will be located in the `dist\` directory.
 
-<h3 align="left">An interface to call home</h3>
-<p align="left">
-Be it as a user or an instance administrator, you can decide what your experience will be like. Don't like the colors? They are easy to change. Don't want to list videos of an instance but let your users subscribe to them? Don't like the regular web client? All of that can be changed, and much more. No UX dark pattern, no mining your data, no video recommendation bullshit™.
-</p>
+4.  **Creating a Windows Installer (Optional):**
+    To create a user-friendly Windows installer (e.g., `.msi` or a setup wizard), you can use tools like:
+    *   **Inno Setup** (free)
+    *   **NSIS (Nullsoft Scriptable Install System)** (free)
+    These tools would take the `.exe` file and other assets generated by PyInstaller to create the installer package.
 
----
+## Usage
 
-<h3 align="right">Communities that help each other</h3>
-<p align="right">
-In addition to visitors using P2P with WebRTC to share the load among them, instances can help each other by caching one another's videos. This way even small instances have a way to show content to a wider audience, as they will be shouldered by friend instances (more about that in our <a href="https://docs.joinpeertube.org/contribute/architecture#redundancy-between-instances">redundancy guide</a>).
-</p>
-<p align="right">
-Content creators can get help from their viewers in the simplest way possible: a support button showing a message linking to their donation accounts or really anything else. No more pay-per-view and advertisements that hurt visitors and alter creativity (more about that in our <a href="https://github.com/Chocobozzz/PeerTube/blob/develop/FAQ.md">FAQ</a>).
-</p>
+1.  Launch the application (either from source or the built executable).
+2.  Enter your PeerTube instance URL (e.g., `https://yourpeertube.org`).
+3.  Click "Connect & Authenticate".
+4.  Enter your PeerTube username and password when prompted by dialog boxes.
+5.  If authentication is successful, your channels will be loaded into the "Channel" dropdown.
+6.  Click "Browse" to select a video file you want to upload.
+7.  Select the desired channel from the dropdown. The channel ID will be used for the upload.
+8.  Enter a title for your video.
+9.  Click "Add to Upload Queue". The video will be added to the queue list, showing its title, channel, and initial "Pending" status.
+10. The application will automatically start processing the queue. The status of the current task will change to "Initializing", then "Uploading", and its progress bar will update.
+11. Upon completion, the task status will show "Completed" (and turn green) or "Failed" (and turn red with an error message).
+12. Monitor detailed activity and any errors in the "Logs" section at the bottom of the window.
+13. You can remove a selected task from the queue using the "Remove Selected Task" button (this will attempt to cancel an ongoing upload for that task).
+14. You can clear all tasks marked as "Completed" from the list using the "Clear Completed Tasks" button.
 
+## Important Note on Uploading to Any Channel
 
+The initial requirement stated: "The user should be able to upload videos to any channel, even if they do not own it."
 
-:raised_hands: Contributing
-----------------------------------------------------------------
+The current implementation of the PeerTube API client (`get_channels` method) fetches channels associated with the *authenticated user's account*. Standard PeerTube permissions typically restrict uploads to channels owned by the authenticated user or where they have explicit rights (e.g., as a channel manager if the API supports such roles for uploads, which needs verification).
 
-You don't need to be a programmer to help!
+Uploading to a channel not owned by the user would generally require:
+1.  The PeerTube instance to be configured to allow such uploads (unlikely for public instances due to security and moderation concerns).
+2.  Or, the authenticated user to have specific administrative or moderator privileges on the target PeerTube instance that grant them permission to upload to other users' channels. The standard API endpoints used (`/api/v1/users/me` to list channels, and `/api/v1/videos/upload-resumable` with a `channelId`) assume the `channelId` provided is one the user has rights to upload to.
 
-You can give us your feedback, report bugs, help us translate PeerTube, write documentation, and more. Check out the [contributing
-guide](https://docs.joinpeertube.org/contribute/getting-started) to know how, it takes less than 2 minutes to get started. :wink:
+This application, as implemented, will list and allow uploads to channels *owned by (or directly manageable by) the authenticated user*. If uploading to truly arbitrary/unowned channels is a strict requirement, the PeerTube instance itself must be configured to support this, and the API interaction might need adjustment if specific API calls are needed for such privileged operations (which are not standard for regular users). The current API usage for uploading is standard for a user uploading to their own/managed channels.
 
-You can also join the cheerful bunch that makes our community:
+## Future Improvements
 
-* Chat<a name="contact"></a>:
-  * Matrix (bridged on IRC and [Discord](https://discord.gg/wj8DDUT)) : **[#peertube:matrix.org](https://matrix.to/#/#peertube:matrix.org)**
-  * IRC : **[#peertube on irc.libera.chat:6697](https://web.libera.chat/#peertube)**
-* Forum:
-  * Framacolibri: [https://framacolibri.org/c/peertube](https://framacolibri.org/c/peertube)
-
-Feel free to reach out if you have any questions or ideas! :speech_balloon:
-
-:package: Create your own instance
-----------------------------------------------------------------
-
-See the [production guide](https://github.com/Chocobozzz/PeerTube/blob/develop/support/doc/production.md), which is the recommended way to install or upgrade PeerTube. For hardware requirements, see [Should I have a big server to run PeerTube?](https://joinpeertube.org/faq#should-i-have-a-big-server-to-run-peertube) in the FAQ.
-
-See the [community packages](https://docs.joinpeertube.org/install/unofficial), which cover various platforms (including [YunoHost](https://install-app.yunohost.org/?app=peertube) and [Docker](https://github.com/Chocobozzz/PeerTube/blob/develop/support/doc/docker.md)).
-
-:book: Documentation
-----------------------------------------------------------------
-
-If you have a question, please try to find the answer in the [FAQ](https://joinpeertube.org/faq) first.
-
-### User documentation
-
-See the [user documentation](https://docs.joinpeertube.org/use/setup-account).
-
-### Admin documentation
-
-See [how to create your own instance](https://github.com/Chocobozzz/PeerTube/blob/develop/README.md#package-create-your-own-instance).
-
-See the more general [admin documentation](https://docs.joinpeertube.org/admin/following-instances).
-
-### Tools documentation
-
-Learn how to import/upload videos from CLI or admin your PeerTube instance with the [tools documentation](https://docs.joinpeertube.org/maintain/tools).
-
-### Technical documentation
-
-See the [architecture blueprint](https://docs.joinpeertube.org/contribute/architecture) for a more detailed explanation of the architectural choices.
-
-See our REST API documentation:
-  * OpenAPI 3.0.0 schema: [/support/doc/api/openapi.yaml](https://github.com/Chocobozzz/PeerTube/blob/develop/support/doc/api/openapi.yaml)
-  * Spec explorer: [docs.joinpeertube.org/api-rest-reference.html](https://docs.joinpeertube.org/api-rest-reference.html)
-
-See our [ActivityPub documentation](https://docs.joinpeertube.org/api/activitypub).
-
-## License
-
-### Logo
-
-[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), by [Framasoft](https://framasoft.org)
-
-### Code
-
-Copyright (C) 2015-2024 PeerTube Contributors (see [CREDITS.md](/CREDITS.md))
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published
-by the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*   Persistent configuration for instance URL and potentially (securely stored) OAuth tokens to avoid re-login.
+*   More detailed error reporting and options for retrying failed uploads.
+*   Ability to edit more video metadata (description, tags, privacy settings, etc.) directly in the GUI before adding to the queue.
+*   Thumbnail selection/preview for videos.
+*   More robust and automated Debian/Windows installer creation as part of the build process (e.g., using `fpm` or Inno Setup scripting).
+*   Internationalization (i18n) support for the GUI.
+*   Option to specify video description, tags, and privacy settings per video.
+*   A settings dialog for application-specific configurations.
+```

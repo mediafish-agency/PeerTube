@@ -65,4 +65,17 @@ yarn-error.log
 .eslintcache
 
 # Compiled output
-dist
+# dist # Already covered by generic dist/ below, or handled by PyInstaller specific rules
+
+# PyInstaller specific
+build/
+build_pyinstaller/
+*.spec
+# dist/ # If you want a specific dist rule for PyInstaller, otherwise generic dist below is fine
+*.pyzw
+*.pyz
+*.toc
+*.pkg
+*.exe
+*.dmg
+*.app
