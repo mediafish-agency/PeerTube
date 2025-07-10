@@ -3,7 +3,7 @@
 # Ensure we are in the script's directory or a known base directory
 # For simplicity, this script assumes it's run from the repository root.
 
-APP_NAME="PeerTubeUploader"
+APP_NAME="TadrebLiveVideoUploader" # Updated App Name
 MAIN_SCRIPT="peertube_uploader/main.py"
 DIST_PATH="dist"
 BUILD_PATH="build_pyinstaller" # Renamed to avoid conflict with potential 'build' dir

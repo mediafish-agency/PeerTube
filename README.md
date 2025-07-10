@@ -1,6 +1,6 @@
-# PeerTube Uploader Desktop Application
+# tadreb.live Video Uploader
 
-A desktop application for Windows and Ubuntu to upload videos to a PeerTube instance.
+A desktop application for Windows and Ubuntu to upload videos to the tadreb.live PeerTube instance.
 
 ## Features
 
@@ -67,7 +67,7 @@ README.md                 # This file (specific to the uploader app)
 
 ## Building Standalone Executables
 
-PyInstaller is used to create standalone executables. The necessary Python packages (PyQt5, requests) will be bundled.
+PyInstaller is used to create standalone executables for "tadreb.live Video Uploader". The necessary Python packages (PyQt5, requests) will be bundled.
 
 ### For Linux:
 
@@ -107,10 +107,9 @@ PyInstaller is used to create standalone executables. The necessary Python packa
 
 ## Usage
 
-1.  Launch the application (either from source or the built executable).
-2.  Enter your PeerTube instance URL (e.g., `https://yourpeertube.org`).
-3.  Click "Connect & Authenticate".
-4.  Enter your PeerTube username and password when prompted by dialog boxes.
+1.  Launch the application (either from source or the built executable). The application is pre-configured to connect to `https://store.tadreb.live`.
+2.  Click the "Connect & Authenticate to: https://store.tadreb.live" button.
+3.  Enter your PeerTube username and password for the `https://store.tadreb.live` instance when prompted by dialog boxes.
 5.  If authentication is successful, your channels will be loaded into the "Channel" dropdown.
 6.  Click "Browse" to select a video file you want to upload.
     *   Select the desired channel from the dropdown.

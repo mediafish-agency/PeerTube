@@ -1,14 +1,13 @@
 import sys
 import os
-import sys
-import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QFileDialog,
                              QComboBox, QGroupBox, QTextEdit, QListWidget, QListWidgetItem,
                              QInputDialog, QMessageBox, QStatusBar, QProgressBar)
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread # Import QThread
 from api.peertube_client import PeerTubeClient
-from core.queue_manager import UploadQueueManager, TaskStatus
+from core.queue_manager import UploadQueueManager, TaskStatus # Import UploadQueueManager and TaskStatus
+from config import settings # Import the settings module
 
 # Signal for updating GUI from other threads
 class GuiSignalEmitter(QObject):
@@ -25,30 +24,35 @@ class GuiSignalEmitter(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PeerTube Uploader")
-        self.setGeometry(100, 100, 900, 750) # Increased height slightly for progress bars
+        self.setWindowTitle("tadreb.live Video Uploader")
+        self.setGeometry(100, 100, 900, 750)
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
-        self.peertube_client = None
-        self.queue_manager = None # Initialize later
-        self.user_channels = []
-        self.task_widgets = {} # task_id -> QListWidgetItem
+        app_settings = settings.load_settings()
+        self.configured_instance_url = app_settings.get('instance_url', '')
+        if not self.configured_instance_url:
+            QMessageBox.critical(self, "Configuration Error", "PeerTube instance URL not configured in settings.py!")
+            self.log_message("CRITICAL: PeerTube instance URL not configured in settings.py!")
+            # Consider exiting or disabling connect button: self.connect_button.setEnabled(False)
 
-        # Setup signal emitter for thread-safe GUI updates
+        self.peertube_client = None
+        self.queue_manager = None
+        self.user_channels = []
+        self.task_widgets = {}
+
         self.gui_signals = GuiSignalEmitter()
         self.gui_signals.task_update_signal.connect(self.handle_task_update_signal)
         self.gui_signals.log_signal.connect(self.log_message_from_thread)
-
 
         self._create_top_section()
         self._create_queue_section()
         self._create_log_section()
         self._create_status_bar()
 
-        self.log_message("Application started. Please connect to your PeerTube instance.")
+        self.log_message(f"Application started. Configured for instance: {self.configured_instance_url if self.configured_instance_url else 'NOT CONFIGURED'}")
 
     def _create_status_bar(self):
         self.statusBar = QStatusBar()
@@ -59,19 +63,19 @@ class MainWindow(QMainWindow):
         top_section_group = QGroupBox("Video Details & Connection")
         top_layout = QVBoxLayout()
 
-        instance_layout = QHBoxLayout()
-        instance_label = QLabel("PeerTube Instance URL:")
-        self.instance_url_input = QLineEdit()
-        self.instance_url_input.setPlaceholderText("https://peertube.example.com")
-        # self.instance_url_input.setText("http://localhost:9000") # For local testing
-        instance_layout.addWidget(instance_label)
-        instance_layout.addWidget(self.instance_url_input)
-        top_layout.addLayout(instance_layout)
+        # Instance URL input is removed. Button text will show the configured URL.
+        if self.configured_instance_url:
+            connect_button_text = f"Connect & Authenticate to: {self.configured_instance_url}"
+        else:
+            connect_button_text = "Connect & Authenticate (URL NOT CONFIGURED)"
 
-        self.connect_button = QPushButton("Connect & Authenticate")
+        self.connect_button = QPushButton(connect_button_text)
         self.connect_button.clicked.connect(self.connect_and_authenticate)
+        if not self.configured_instance_url:
+            self.connect_button.setEnabled(False) # Disable if no URL
         top_layout.addWidget(self.connect_button)
 
+        # File Selection
         file_layout = QHBoxLayout()
         self.file_path_input = QLineEdit()
         self.file_path_input.setPlaceholderText("Select video file...")
@@ -83,6 +87,7 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(browse_button)
         top_layout.addLayout(file_layout)
 
+        # Channel Selection
         channel_layout = QHBoxLayout()
         self.channel_combo = QComboBox()
         self.channel_combo.addItem("Connect to instance first")
@@ -91,6 +96,7 @@ class MainWindow(QMainWindow):
         channel_layout.addWidget(self.channel_combo, 1)
         top_layout.addLayout(channel_layout)
 
+        # Title
         title_layout = QHBoxLayout()
         self.title_input = QLineEdit()
         self.title_input.setPlaceholderText("Enter video title")
@@ -98,6 +104,7 @@ class MainWindow(QMainWindow):
         title_layout.addWidget(self.title_input)
         top_layout.addLayout(title_layout)
 
+        # Add to Queue Button
         self.add_to_queue_button = QPushButton("Add to Upload Queue")
         self.add_to_queue_button.clicked.connect(self.add_to_queue)
         top_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
@@ -112,7 +119,6 @@ class MainWindow(QMainWindow):
         self.upload_queue_listwidget = QListWidget()
         queue_main_layout.addWidget(self.upload_queue_listwidget)
 
-        # Buttons for queue management
         queue_buttons_layout = QHBoxLayout()
         self.remove_selected_button = QPushButton("Remove Selected Task")
         self.remove_selected_button.clicked.connect(self.remove_selected_task_from_queue)
@@ -137,47 +143,44 @@ class MainWindow(QMainWindow):
         self.layout.setStretchFactor(log_section_group, 1)
 
     def log_message_from_thread(self, message):
-        # This method is connected to the signal and is safe to call from other threads
         self.log_output_area.append(message)
         print(message)
 
     def log_message(self, message):
-        # For messages logged directly from the GUI thread
         if QThread.currentThread() == QApplication.instance().thread():
             self.log_output_area.append(message)
             print(message)
         else:
-            # If somehow called from another thread without direct signal, emit it
             self.gui_signals.emit_log(message)
-
 
     def show_status_message(self, message, timeout=3000):
         self.statusBar.showMessage(message, timeout)
 
     def connect_and_authenticate(self):
-        instance_url = self.instance_url_input.text().strip()
-        if not instance_url:
-            QMessageBox.warning(self, "Input Error", "Please enter a PeerTube instance URL.")
-            self.log_message("Error: PeerTube instance URL is required.")
+        # Instance URL is now from self.configured_instance_url
+        if not self.configured_instance_url:
+            QMessageBox.critical(self, "Configuration Error", "PeerTube instance URL is not configured. Cannot connect.")
+            self.log_message("Error: Connection attempt failed, instance URL not configured.")
             return
 
-        # Stop existing queue manager if any, before creating new client
+        instance_url = self.configured_instance_url # Use the configured URL
+
         if self.queue_manager and self.queue_manager.is_processing:
             self.queue_manager.stop_processing()
             self.log_message("Stopped previous queue processing due to new connection attempt.")
 
-        self.peertube_client = PeerTubeClient(instance_url)
+        self.peertube_client = PeerTubeClient(instance_url) # Use configured URL
         self.log_message(f"Attempting to connect to {instance_url}...")
         self.show_status_message(f"Connecting to {instance_url}...")
 
-        username, ok1 = QInputDialog.getText(self, "Login", "Enter your PeerTube Username:")
+        username, ok1 = QInputDialog.getText(self, "Login", f"Enter Username for {instance_url}:")
         if not ok1 or not username:
             self.log_message("Authentication cancelled by user (username).")
             self.show_status_message("Authentication cancelled.")
             return
 
-        password, ok2 = QInputDialog.getText(self, "Login", "Enter your PeerTube Password:", QLineEdit.Password)
-        if not ok2: # Allow empty password field if user cancels
+        password, ok2 = QInputDialog.getText(self, "Login", "Enter Password:", QLineEdit.Password)
+        if not ok2:
             self.log_message("Authentication cancelled by user (password).")
             self.show_status_message("Authentication cancelled.")
             return
@@ -185,30 +188,29 @@ class MainWindow(QMainWindow):
         self.log_message(f"Authenticating user {username}...")
         self.show_status_message(f"Authenticating {username}...")
 
-        # Pass the GUI log method to the client for its internal logging
-        # self.peertube_client.set_logger(self.log_message_from_thread) # If client supports this
-
         if self.peertube_client.authenticate(username, password):
             self.log_message("Authentication successful!")
             self.show_status_message("Authentication successful!", 5000)
 
-            # Initialize QueueManager here, after successful authentication
-            if self.queue_manager: # Stop old one if it exists
-                 self.queue_manager.stop_processing()
-            self.queue_manager = UploadQueueManager(
-                peertube_client=self.peertube_client,
-                status_update_callback=self.gui_signals.emit_task_update, # Use signal emitter
-                log_callback=self.gui_signals.emit_log
-            )
-            self.log_message("UploadQueueManager initialized.")
+            if self.queue_manager:
+                 self.queue_manager.stop_processing() # Stop old one if any
+                 # Update existing queue manager's client if it exists and is processing, or re-init
+                 self.queue_manager.peertube_client = self.peertube_client
+                 self.log_message("Updated PeerTube client for existing QueueManager.")
+            else:
+                self.queue_manager = UploadQueueManager(
+                    peertube_client=self.peertube_client,
+                    status_update_callback=self.gui_signals.emit_task_update,
+                    log_callback=self.gui_signals.emit_log
+                )
+                self.log_message("UploadQueueManager initialized.")
             self.load_channels()
         else:
             self.log_message("Authentication failed. Check logs and credentials.")
-            QMessageBox.critical(self, "Authentication Failed", "Could not authenticate. Please check credentials, instance URL, and logs.")
+            QMessageBox.critical(self, "Authentication Failed", "Could not authenticate. Please check credentials and logs.")
             self.show_status_message("Authentication failed.", 5000)
             self.peertube_client = None
-            self.queue_manager = None
-
+            # Do not nullify queue_manager here, it might have pending tasks from a previous session if we implement saving queue state
 
     def load_channels(self):
         if not self.peertube_client or not self.peertube_client.access_token:
@@ -227,24 +229,17 @@ class MainWindow(QMainWindow):
             if channels_data:
                 self.channel_combo.addItem("--- Select a Channel ---")
                 for channel in channels_data:
-                    # Store necessary channel info, including owner for display logic
                     self.user_channels.append({
                         'id': channel['id'],
                         'displayName': channel['displayName'],
-                        'name': channel['name'], # channel handle
+                        'name': channel['name'],
                         'ownerAccountName': channel.get('ownerAccountName', 'N/A')
                     })
 
                     display_text = f"{channel['displayName']} (Handle: {channel['name']})"
-                    # Add owner info if it's an admin/mod looking at other's channels
-                    # self.peertube_client.username is the authenticated user's account name (e.g. 'root')
-                    # channel['ownerAccountName'] might be 'root@peertube_instance' or just 'anotheruser'
-                    # We need to compare the core part of the account name.
-
                     owner_display = channel.get('ownerAccountName', 'N/A')
                     is_own_channel = False
                     if self.peertube_client and self.peertube_client.username:
-                        # ownerAccountName can be 'user' or 'user@domain'. Authenticated username is usually just 'user'.
                         if owner_display == self.peertube_client.username or \
                            owner_display.startswith(self.peertube_client.username + "@"):
                            is_own_channel = True
@@ -252,16 +247,15 @@ class MainWindow(QMainWindow):
                     if (self.peertube_client and self.peertube_client.user_role_id in [0, 1]) and not is_own_channel and owner_display != 'N/A':
                         display_text += f" (Owner: {owner_display})"
 
-                    self.channel_combo.addItem(display_text, channel['id']) # Store ID as item data
-
+                    self.channel_combo.addItem(display_text, channel['id'])
                 self.channel_combo.setEnabled(True)
                 self.log_message(f"Loaded {len(channels_data)} channels.")
                 self.show_status_message(f"Loaded {len(channels_data)} channels.", 3000)
             else:
-                self.log_message("No channels found for your account.")
+                self.log_message("No channels found for your account or instance.")
                 self.channel_combo.addItem("No channels found")
                 self.channel_combo.setEnabled(False)
-                self.show_status_message("No channels found for your account.", 3000)
+                self.show_status_message("No channels found.", 3000)
         else:
             self.log_message("Failed to load channels. See logs.")
             self.channel_combo.addItem("Failed to load channels")
@@ -290,11 +284,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Input Error", "Please select a video file.")
             return
 
-        if current_channel_index <= 0: # 0 is "--- Select ---"
+        if current_channel_index <= 0:
             QMessageBox.warning(self, "Input Error", "Please select a channel.")
             return
 
-        channel_id = self.channel_combo.itemData(current_channel_index) # Get stored ID
+        channel_id = self.channel_combo.itemData(current_channel_index)
 
         if not title:
             QMessageBox.warning(self, "Input Error", "Please enter a video title.")
@@ -304,12 +298,10 @@ class MainWindow(QMainWindow):
             self.log_message("Error: Video title must be between 3 and 120 characters.")
             return
 
-        # Description, privacy, etc., can be added as more fields or defaults
         task_id = self.queue_manager.add_task(
             file_path=file_path,
             channel_id=channel_id,
             title=title
-            # TODO: Add description, privacy, nsfw, tags from GUI if elements are added
         )
         self.log_message(f"Task '{title}' (ID: {task_id}) added to internal queue.")
         self.show_status_message(f"Added '{title}' to queue.", 2000)
@@ -318,7 +310,6 @@ class MainWindow(QMainWindow):
         self.title_input.clear()
 
     def handle_task_update_signal(self, task_id, status_enum, progress, video_id, error_message, is_new, file_path, title, channel_id_from_cb, is_removed):
-        # This method is connected to the signal and is safe to call from other threads
         if is_removed:
             if task_id in self.task_widgets:
                 item_to_remove = self.task_widgets.pop(task_id)
@@ -329,77 +320,93 @@ class MainWindow(QMainWindow):
         item = self.task_widgets.get(task_id)
 
         if is_new and not item:
-            # Find the channel display name for the new item
             channel_display_name = "Unknown Channel"
-            for ch_data in self.user_channels:
+            for ch_data in self.user_channels: # Use self.user_channels which is populated
                 if ch_data['id'] == channel_id_from_cb:
                     channel_display_name = ch_data['displayName']
+                    if self.peertube_client and self.peertube_client.user_role_id in [0,1] and \
+                       ch_data.get('ownerAccountName') != self.peertube_client.username and \
+                       not ch_data.get('ownerAccountName', 'N/A').startswith(self.peertube_client.username + "@") and \
+                       ch_data.get('ownerAccountName') != 'N/A':
+                        channel_display_name += f" (Owner: {ch_data['ownerAccountName']})"
                     break
 
             base_text = f"ID: {task_id} - Title: {title} - Channel: {channel_display_name}"
             item = QListWidgetItem()
-            self.task_widgets[task_id] = item
+            self.task_widgets[task_id] = item # Store the QListWidgetItem itself
             self.upload_queue_listwidget.addItem(item)
 
-            # Create a custom widget for the list item to include a progress bar
             item_widget = QWidget()
             item_layout = QHBoxLayout(item_widget)
-            item_layout.setContentsMargins(5, 2, 5, 2) # Compact margins
+            item_layout.setContentsMargins(5, 2, 5, 2)
 
-            self.task_widgets[task_id].label = QLabel(base_text)
-            self.task_widgets[task_id].label.setWordWrap(True)
-            item_layout.addWidget(self.task_widgets[task_id].label, 1) # Label takes expanding space
+            # Store custom widget parts in a dictionary associated with the task_id or QListWidgetItem
+            # For simplicity, let's make task_widgets store a dict of these parts
+            self.task_widgets[task_id] = {
+                'item': item, # Keep reference to the QListWidgetItem
+                'label': QLabel(base_text),
+                'progress_bar': QProgressBar(),
+                'status_label': QLabel(f" {status_enum.value}")
+            }
 
-            self.task_widgets[task_id].progress_bar = QProgressBar()
-            self.task_widgets[task_id].progress_bar.setRange(0, 100)
-            self.task_widgets[task_id].progress_bar.setValue(0)
-            self.task_widgets[task_id].progress_bar.setTextVisible(True)
-            self.task_widgets[task_id].progress_bar.setFixedSize(120, 18) # Fixed size for progress bar
-            item_layout.addWidget(self.task_widgets[task_id].progress_bar)
+            self.task_widgets[task_id]['label'].setWordWrap(True)
+            item_layout.addWidget(self.task_widgets[task_id]['label'], 1)
 
-            self.task_widgets[task_id].status_label = QLabel(f" {status_enum.value}")
-            self.task_widgets[task_id].status_label.setFixedWidth(80) # Fixed width for status
-            item_layout.addWidget(self.task_widgets[task_id].status_label)
+            self.task_widgets[task_id]['progress_bar'].setRange(0, 100)
+            self.task_widgets[task_id]['progress_bar'].setValue(0)
+            self.task_widgets[task_id]['progress_bar'].setTextVisible(True)
+            self.task_widgets[task_id]['progress_bar'].setFixedSize(120, 18)
+            item_layout.addWidget(self.task_widgets[task_id]['progress_bar'])
+
+            self.task_widgets[task_id]['status_label'].setFixedWidth(80)
+            item_layout.addWidget(self.task_widgets[task_id]['status_label'])
 
             item_widget.setLayout(item_layout)
             item.setSizeHint(item_widget.sizeHint())
             self.upload_queue_listwidget.setItemWidget(item, item_widget)
             self.log_message(f"Added task {task_id} to GUI queue: {title}")
 
+        # Check if item and its custom widget parts exist before updating
+        if task_id in self.task_widgets and isinstance(self.task_widgets[task_id], dict) and 'label' in self.task_widgets[task_id]:
+            task_gui_parts = self.task_widgets[task_id]
+            task_gui_parts['status_label'].setText(f" {status_enum.value}")
+            task_gui_parts['progress_bar'].setValue(progress if progress is not None else 0)
 
-        if item and hasattr(self.task_widgets[task_id], 'label'): # Check if custom widget setup
-            # Update existing item
-            self.task_widgets[task_id].status_label.setText(f" {status_enum.value}")
-            self.task_widgets[task_id].progress_bar.setValue(progress if progress is not None else 0)
+            current_label_text = task_gui_parts['label'].text()
+            # Avoid re-appending Video ID if already there
+            video_id_text_segment = f" (Video ID: {video_id})"
 
             if status_enum == TaskStatus.FAILED:
-                self.task_widgets[task_id].label.setStyleSheet("color: red;")
-                self.task_widgets[task_id].status_label.setStyleSheet("color: red;")
-                self.log_message(f"Task {task_id} ('{self.task_widgets[task_id].label.text().split(' - ')[1]}') FAILED: {error_message}")
+                task_gui_parts['label'].setStyleSheet("color: red;")
+                task_gui_parts['status_label'].setStyleSheet("color: red;")
+                self.log_message(f"Task {task_id} ('{title}') FAILED: {error_message}") # Use title from signal for log
             elif status_enum == TaskStatus.COMPLETED:
-                self.task_widgets[task_id].label.setStyleSheet("color: green;")
-                self.task_widgets[task_id].status_label.setStyleSheet("color: green;")
-                self.task_widgets[task_id].label.setText(self.task_widgets[task_id].label.text() + f" (Video ID: {video_id})")
+                task_gui_parts['label'].setStyleSheet("color: green;")
+                task_gui_parts['status_label'].setStyleSheet("color: green;")
+                if video_id and video_id_text_segment not in current_label_text:
+                    task_gui_parts['label'].setText(current_label_text + video_id_text_segment)
             elif status_enum == TaskStatus.CANCELLED:
-                self.task_widgets[task_id].label.setStyleSheet("color: orange;")
-                self.task_widgets[task_id].status_label.setStyleSheet("color: orange;")
-            else:
-                self.task_widgets[task_id].label.setStyleSheet("") # Reset color
-                self.task_widgets[task_id].status_label.setStyleSheet("")
+                task_gui_parts['label'].setStyleSheet("color: orange;")
+                task_gui_parts['status_label'].setStyleSheet("color: orange;")
+            else: # Pending, Initializing, Uploading
+                task_gui_parts['label'].setStyleSheet("")
+                task_gui_parts['status_label'].setStyleSheet("")
+                # Ensure Video ID is not present if not completed
+                if video_id_text_segment in current_label_text:
+                     task_gui_parts['label'].setText(current_label_text.replace(video_id_text_segment, ""))
 
 
     def remove_selected_task_from_queue(self):
-        selected_items = self.upload_queue_listwidget.selectedItems()
-        if not selected_items:
+        selected_list_items = self.upload_queue_listwidget.selectedItems()
+        if not selected_list_items:
             QMessageBox.information(self, "No Selection", "Please select a task from the queue to remove.")
             return
 
-        list_item_to_remove = selected_items[0] # QListWidget is single-selection by default
+        list_item_to_remove = selected_list_items[0]
 
-        # Find task_id associated with this QListWidgetItem
         task_id_to_remove = None
-        for tid, item_widget_data in self.task_widgets.items():
-            if item_widget_data == list_item_to_remove: # Comparing QListWidgetItem references
+        for tid, widget_data in self.task_widgets.items():
+            if isinstance(widget_data, dict) and widget_data.get('item') == list_item_to_remove:
                 task_id_to_remove = tid
                 break
 
@@ -410,15 +417,13 @@ class MainWindow(QMainWindow):
             if confirm == QMessageBox.Yes:
                 if self.queue_manager.remove_task(task_id_to_remove):
                     self.log_message(f"Request to remove task {task_id_to_remove} sent to queue manager.")
-                    # GUI removal will happen via handle_task_update_signal with is_removed=True
-                else:
-                    self.log_message(f"Failed to send remove request for task {task_id_to_remove} to queue manager (task not found in manager).")
-                    # If not found in manager, but in GUI, remove from GUI directly
+                else: # Not found in manager, but was in GUI dict. Remove from GUI.
+                    self.log_message(f"Task {task_id_to_remove} not in queue manager, removing from GUI only.")
                     if task_id_to_remove in self.task_widgets:
-                         item_to_remove_gui = self.task_widgets.pop(task_id_to_remove)
-                         self.upload_queue_listwidget.takeItem(self.upload_queue_listwidget.row(item_to_remove_gui))
-                         self.log_message(f"Removed task {task_id_to_remove} from GUI (was not in manager).")
-
+                        popped_item_data = self.task_widgets.pop(task_id_to_remove)
+                        if isinstance(popped_item_data, dict):
+                             self.upload_queue_listwidget.takeItem(self.upload_queue_listwidget.row(popped_item_data['item']))
+                        self.log_message(f"Removed task {task_id_to_remove} from GUI.")
         elif not self.queue_manager:
              self.log_message("Queue manager not available to remove task.")
 
@@ -433,18 +438,22 @@ class MainWindow(QMainWindow):
                                        QMessageBox.Yes | QMessageBox.No)
         if confirm == QMessageBox.Yes:
             tasks_to_remove_ids = []
-            with self.queue_manager.queue_lock: # Iterate over a copy for safe removal
-                for task_obj in list(self.queue_manager.queue):
-                    if task_obj.status == TaskStatus.COMPLETED:
-                        tasks_to_remove_ids.append(task_obj.task_id)
+            # Need to iterate based on what's in the GUI and its status, then tell manager
+            for task_id, widget_data in list(self.task_widgets.items()): # list() for safe iteration if removing
+                if isinstance(widget_data, dict) and widget_data['status_label'].text().strip() == TaskStatus.COMPLETED.value:
+                    tasks_to_remove_ids.append(task_id)
+
+            if not tasks_to_remove_ids:
+                self.log_message("No completed tasks found in the GUI list to clear.")
+                return
 
             for task_id in tasks_to_remove_ids:
-                self.queue_manager.remove_task(task_id) # This will trigger GUI update via signal
+                # Manager will emit signal which will remove it from GUI via handle_task_update_signal
+                self.queue_manager.remove_task(task_id)
             self.log_message(f"Requested removal of {len(tasks_to_remove_ids)} completed tasks.")
 
 
     def closeEvent(self, event):
-        # Ensure queue processing is stopped cleanly when window closes
         self.log_message("Main window closing. Stopping queue manager...")
         if self.queue_manager:
             self.queue_manager.stop_processing()
