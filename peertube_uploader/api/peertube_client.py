@@ -420,8 +420,7 @@ class PeerTubeClient:
                  # Client should then query server for current offset using HEAD request
                  # For now, we'll assume PeerTube doesn't strictly require this for simple sequential uploads
                  return {"status": "chunk_uploaded"} # Treat as success for now, but might need offset check
-
-            else:
+            else: # This else corresponds to: if response.status_code not in [200, 204, 308]
                 response.raise_for_status() # Will raise for other 4xx/5xx errors
 
         except requests.exceptions.HTTPError as http_err:
