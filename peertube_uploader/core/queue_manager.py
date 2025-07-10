@@ -68,7 +68,17 @@ class UploadQueueManager:
         self._log(f"Task '{task.title}' (ID: {task.task_id}) status: {status.value}, Progress: {task.progress}%, Error: {task.error_message}")
 
         if self.status_update_callback:
-            self.status_update_callback(task.task_id, task.status, task.progress, task.video_id_on_peertube, task.error_message)
+            # For a general status update, is_new and is_removed are False.
+            # We need to pass all arguments the signal expects.
+            self.status_update_callback(
+                task.task_id, task.status, task.progress,
+                task.video_id_on_peertube, task.error_message,
+                False,  # is_new
+                task.file_path, # file_path
+                task.title,     # title
+                task.channel_id,# channel_id
+                False   # is_removed
+            )
 
 
     def add_task(self, file_path, channel_id, title, description="", privacy=1, nsfw=False, tags=None):
