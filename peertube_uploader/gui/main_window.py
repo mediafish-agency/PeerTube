@@ -1,12 +1,14 @@
 import sys
 import os
+import sys
+import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QFileDialog,
                              QComboBox, QGroupBox, QTextEdit, QListWidget, QListWidgetItem,
                              QInputDialog, QMessageBox, QStatusBar, QProgressBar)
-from PyQt5.QtCore import Qt, pyqtSignal, QObject # Import pyqtSignal and QObject for custom signals
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread # Import QThread
 from api.peertube_client import PeerTubeClient
-from core.queue_manager import UploadQueueManager, TaskStatus # Import UploadQueueManager and TaskStatus
+from core.queue_manager import UploadQueueManager, TaskStatus
 
 # Signal for updating GUI from other threads
 class GuiSignalEmitter(QObject):
