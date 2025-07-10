@@ -257,8 +257,12 @@ class PeerTubeClient:
             return None
         except requests.exceptions.RequestException as e:
             print(f"Error initializing resumable upload (RequestException): {e}")
+            if e.response is not None:
+                print(f"Underlying response status code: {e.response.status_code}")
+                print(f"Underlying response text: '{e.response.text}'")
             return None
         except json.JSONDecodeError as json_err:
+            # This block might be preempted if RequestException catches JSONDecodeError from response.json()
             print(f"Error decoding JSON response from resumable init. Status Code: {response.status_code if response else 'N/A'}")
             raw_response_text = response.text if response else "No response object"
             print(f"Raw response text for JSONDecodeError: '{raw_response_text}'")
