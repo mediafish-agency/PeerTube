@@ -78,7 +78,7 @@ class UploadQueueManager:
             self.queue.append(task)
             self._log(f"Added task: {title} (ID: {task.task_id}) to queue. File: {file_path}")
             if self.status_update_callback: # Notify GUI about new task in queue
-                 self.status_update_callback(task.task_id, task.status, task.progress, None, None, is_new=True, file_path=task.file_path, title=task.title, channel_id=task.channel_id)
+                 self.status_update_callback(task.task_id, task.status, task.progress, None, None, is_new=True, file_path=task.file_path, title=task.title, channel_id=task.channel_id, is_removed=False)
 
         if not self.is_processing:
             self.start_processing()
