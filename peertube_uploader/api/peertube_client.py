@@ -256,13 +256,15 @@ class PeerTubeClient:
             print(f"Response content: {http_err.response.text}")
             return None
         except requests.exceptions.RequestException as e:
-            print(f"Error initializing resumable upload: {e}")
+            print(f"Error initializing resumable upload (RequestException): {e}")
             return None
-        except json.JSONDecodeError:
-            print(f"Error decoding JSON response from resumable init: {response.text}")
+        except json.JSONDecodeError as json_err:
+            print(f"Error decoding JSON response from resumable init. Status Code: {response.status_code if response else 'N/A'}")
+            raw_response_text = response.text if response else "No response object"
+            print(f"Raw response text for JSONDecodeError: '{raw_response_text}'")
+            print(f"JSONDecodeError: {json_err}")
             return None
-        return None
-
+        # Removed the final 'return None' here as all paths should return within try/except
 
     def upload_video_chunk(self, upload_id, file_path, chunk_start, chunk_size, total_size, progress_callback=None):
         """
