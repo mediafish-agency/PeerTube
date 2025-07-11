@@ -314,7 +314,19 @@ class UploadQueueManager:
         # chunk_size = 1024 * 1024 * 2  # Old hardcoded value
         task.bytes_uploaded = 0
 
-        while task.bytes_uploaded < task.total_size and not self.stop_event.is_set():
+        while task.bytes_uploaded < task.total_size: # Condition simplified, checks moved inside
+            if self.stop_event.is_set(): # Priority 1: Hard stop/cancel
+                self._log(f"Stop event set during upload of task {task.task_id}. Attempting to cancel.")
+                if task.resumable_upload_id: # Cancel on server
+                    self.peertube_client.cancel_resumable_upload(task.resumable_upload_id)
+                self._update_task_status(task, TaskStatus.CANCELLED, error="Upload cancelled by user.")
+                return # Exit _handle_upload
+
+            if self.is_manually_paused: # Priority 2: Soft pause
+                time.sleep(0.5)  # Wait a bit before checking again
+                continue # Re-evaluate stop_event and is_manually_paused
+
+            # If neither stopped nor paused, proceed with chunk upload
             current_chunk_size = min(self.chunk_size_bytes, task.total_size - task.bytes_uploaded)
 
             upload_status_result = self.peertube_client.upload_video_chunk(
@@ -325,13 +337,13 @@ class UploadQueueManager:
                 total_size=task.total_size
             )
 
-            if self.stop_event.is_set(): # Check immediately after potentially blocking call
-                self._log(f"Stop event set during upload of task {task.task_id}. Attempting to cancel.")
-                if task.resumable_upload_id: # Cancel on server
-                    self.peertube_client.cancel_resumable_upload(task.resumable_upload_id)
-                self._update_task_status(task, TaskStatus.CANCELLED, error="Upload cancelled by user.")
-                return
-
+            # The stop_event check is now at the top of the loop, so this redundant check is removed.
+            # if self.stop_event.is_set(): # Check immediately after potentially blocking call
+            #     self._log(f"Stop event set during upload of task {task.task_id}. Attempting to cancel.")
+            #     if task.resumable_upload_id: # Cancel on server
+            #         self.peertube_client.cancel_resumable_upload(task.resumable_upload_id)
+            #     self._update_task_status(task, TaskStatus.CANCELLED, error="Upload cancelled by user.")
+            #     return
 
             if upload_status_result.get("status") == "chunk_uploaded":
                 task.bytes_uploaded += current_chunk_size
