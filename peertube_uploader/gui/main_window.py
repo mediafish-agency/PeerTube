@@ -5,8 +5,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QComboBox, QGroupBox, QTextEdit, QListWidget, QListWidgetItem,
                              QInputDialog, QMessageBox, QStatusBar, QProgressBar,
                              QSplitter, QFrame, QAbstractItemView, QTreeView, QListView, # Added QTreeView, QListView
-                             QFileSystemModel) # Added QFileSystemModel
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QDir # Import QThread, QDir
+                             QFileSystemModel, QStyle) # Added QFileSystemModel, QStyle
+from PyQt5.QtGui import QIcon # Import QIcon
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QDir, QSettings # Import QThread, QDir, QSettings
 from api.peertube_client import PeerTubeClient
 from core.queue_manager import UploadQueueManager, TaskStatus # Import UploadQueueManager and TaskStatus
 from config import settings # Import the settings module
@@ -27,6 +28,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("tadreb.live Video Uploader")
+
+        # Initialize QSettings
+        # Using generic names; replace "YourOrg" and "PeerTubeUploader" as appropriate
+        self.settings = QSettings("PeerTubeUploaderOrg", "PeerTubeUploaderApp")
+
         self.setGeometry(100, 100, 900, 750) # Initial size, user can resize with splitters
 
         self.central_widget = QWidget()
@@ -113,6 +119,15 @@ class MainWindow(QMainWindow):
         self.overall_layout.addWidget(self.main_v_splitter)
         self._create_status_bar()
 
+        # Restore splitter states
+        v_splitter_state = self.settings.value("gui/main_v_splitter_state")
+        if v_splitter_state:
+            self.main_v_splitter.restoreState(v_splitter_state)
+
+        h_splitter_state = self.settings.value("gui/middle_h_splitter_state")
+        if h_splitter_state:
+            self.middle_h_splitter.restoreState(h_splitter_state)
+
         # The channel_search_input is created in the channel browser setup.
         # Video Details related widgets (file_path_input, title_input, add_to_queue_button)
         # are now created within _create_local_file_browser_group.
@@ -161,10 +176,13 @@ class MainWindow(QMainWindow):
         self.file_path_input = QLineEdit()
         self.file_path_input.setPlaceholderText("Select video file...")
         self.file_path_input.setReadOnly(True)
-        # Connect textChanged here if needed, or rely on _update_add_to_queue_button_state calls
-        # self.file_path_input.textChanged.connect(self._update_add_to_queue_button_state)
-        browse_button = QPushButton("Browse")
+
+        browse_button = QPushButton() # Text removed, icon will be set
+        browse_icon = self.style().standardIcon(QStyle.SP_DirOpenIcon)
+        browse_button.setIcon(browse_icon)
+        browse_button.setToolTip("Browse for video file")
         browse_button.clicked.connect(self.browse_file)
+
         file_layout.addWidget(QLabel("File:")) # Shorter label
         file_layout.addWidget(self.file_path_input)
         file_layout.addWidget(browse_button)
@@ -180,7 +198,11 @@ class MainWindow(QMainWindow):
         controls_layout.addLayout(title_layout)
 
         # Add to Queue Button
-        self.add_to_queue_button = QPushButton("Add to Upload Queue")
+        self.add_to_queue_button = QPushButton() # Text removed for icon, or can be " Add"
+        add_icon = self.style().standardIcon(QStyle.SP_ArrowUp) # Using SP_ArrowUp for "upload"
+        self.add_to_queue_button.setIcon(add_icon)
+        self.add_to_queue_button.setText("Add to Queue") # Keep text for clarity, icon is a visual aid
+        self.add_to_queue_button.setToolTip("Add selected video to the upload queue")
         self.add_to_queue_button.clicked.connect(self.add_to_queue)
         self.add_to_queue_button.setEnabled(False) # Initial state
         controls_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
@@ -227,13 +249,21 @@ class MainWindow(QMainWindow):
             self.log_message("Error: File browser models not ready for initialization.")
             return
 
-        home_path = QDir.homePath()
-        self.dir_model.setRootPath(home_path)
-        self.dir_tree_view.setRootIndex(self.dir_model.index(home_path))
+        default_path = QDir.homePath()
+        saved_path = self.settings.value("gui/lastLocalPath", default_path)
 
-        self.file_model.setRootPath(home_path) # Initialize file model to the same path
-        self.file_list_view.setRootIndex(self.file_model.index(home_path))
-        self.log_message(f"Local file browser initialized to: {home_path}")
+        if not QDir(saved_path).exists(): # Check if saved path is valid
+            self.log_message(f"Saved path '{saved_path}' does not exist. Falling back to home directory.")
+            saved_path = default_path
+            # Optionally, clear the invalid saved path from settings
+            # self.settings.remove("gui/lastLocalPath")
+
+        self.dir_model.setRootPath(saved_path)
+        self.dir_tree_view.setRootIndex(self.dir_model.index(saved_path))
+
+        self.file_model.setRootPath(saved_path)
+        self.file_list_view.setRootIndex(self.file_model.index(saved_path))
+        self.log_message(f"Local file browser initialized to: {saved_path}")
 
     def _on_local_dir_selected(self, index):
         path = self.dir_model.filePath(index)
@@ -245,6 +275,11 @@ class MainWindow(QMainWindow):
         if os.path.isfile(file_path): # Ensure it's a file
             self.file_path_input.setText(file_path)
             self.log_message(f"Local file selected via browser: {file_path}")
+
+            # Save the directory of the selected file
+            directory_path = os.path.dirname(file_path)
+            self.settings.setValue("gui/lastLocalPath", directory_path)
+            self.log_message(f"Saved last local path: {directory_path}")
 
             # Automatically set title from filename (reuse logic from browse_file)
             base_name = os.path.basename(file_path)
@@ -578,6 +613,11 @@ class MainWindow(QMainWindow):
             self.log_message(f"Selected file: {file_name}")
             self.show_status_message(f"File selected: {os.path.basename(file_name)}", 2000)
 
+            # Save the directory of the selected file
+            directory_path = os.path.dirname(file_name)
+            self.settings.setValue("gui/lastLocalPath", directory_path)
+            self.log_message(f"Saved last local path from browse: {directory_path}")
+
             # Automatically set title from filename
             base_name = os.path.basename(file_name)
             title_without_extension, _ = os.path.splitext(base_name)
@@ -771,10 +811,19 @@ class MainWindow(QMainWindow):
 
 
     def closeEvent(self, event):
-        self.log_message("Main window closing. Stopping queue manager...")
+        self.log_message("Main window closing...")
+
+        # Save splitter states
+        self.settings.setValue("gui/main_v_splitter_state", self.main_v_splitter.saveState())
+        self.settings.setValue("gui/middle_h_splitter_state", self.middle_h_splitter.saveState())
+
+        self.log_message("Splitter states saved.")
+
         if self.queue_manager:
+            self.log_message("Stopping queue manager...")
             self.queue_manager.stop_processing()
         super().closeEvent(event)
+        self.log_message("Application closed.")
 
     def _update_queue_control_button_states(self):
         """Updates the enabled state and text of queue control buttons."""
