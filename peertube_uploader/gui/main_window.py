@@ -34,14 +34,17 @@ class MainWindow(QMainWindow):
         # Initialize QSettings
         # Using generic names; replace "YourOrg" and "PeerTubeUploader" as appropriate
         self.settings = QSettings("PeerTubeUploaderOrg", "PeerTubeUploaderApp")
+        self.log_message(f"QSettings initialized. Backend: {self.settings.format()}, Path: {self.settings.fileName()}")
 
         # One-time cleanup of old history key, if it exists
         if self.settings.contains("history/uploads"):
             self.settings.remove("history/uploads")
-            self.log_message("Removed old format upload history key 'history/uploads'.")
+            self.log_message("DEBUG: Removed old format upload history key 'history/uploads'.")
 
         self.upload_history = []
+        self.log_message("DEBUG: Initializing upload_history as []. Calling _load_upload_history...")
         self._load_upload_history() # Loads from "history/uploads_json"
+        self.log_message(f"DEBUG: After _load_upload_history, self.upload_history is: {self.upload_history}")
 
         self.setGeometry(100, 100, 900, 750) # Initial size, user can resize with splitters
 
@@ -901,10 +904,15 @@ class MainWindow(QMainWindow):
         self.settings.setValue("gui/main_v_splitter_state", self.main_v_splitter.saveState())
         self.settings.setValue("gui/middle_h_splitter_state", self.middle_h_splitter.saveState())
 
-        self.log_message("Splitter states saved.")
+        self.settings.setValue("gui/middle_h_splitter_state", self.middle_h_splitter.saveState())
+        self.settings.setValue("gui/middle_h_splitter_state", self.middle_h_splitter.saveState())
+        self.log_message("DEBUG: Splitter states prepared for saving.")
 
-        self._save_upload_history() # Save history on close
-        self.log_message("Upload history saved.")
+        # self.log_message("DEBUG: Calling _save_upload_history from closeEvent...")
+        # self._save_upload_history() # Save history on close
+        # Relying on saves from _add_to_upload_history. If history could be altered elsewhere without saving,
+        # this might need to be re-instated or that alteration point needs to save.
+        self.log_message("DEBUG: History is saved when items are added. Skipping explicit save from closeEvent for now to test.")
 
         if self.queue_manager:
             self.log_message("Stopping queue manager...")
@@ -913,50 +921,53 @@ class MainWindow(QMainWindow):
         self.log_message("Application closed.")
 
     def _load_upload_history(self):
+        self.log_message("DEBUG: Attempting to load upload history...")
         json_string = self.settings.value("history/uploads_json", None)
-        if json_string:
+        self.log_message(f"DEBUG: Raw JSON string from settings: '{json_string}' (type: {type(json_string)})")
+
+        if json_string and isinstance(json_string, str) and len(json_string.strip()) > 0 :
             try:
                 loaded_history = json.loads(json_string)
+                self.log_message(f"DEBUG: Successfully parsed JSON. Loaded items: {len(loaded_history)}")
                 # Optional: Convert status strings back to TaskStatus enums if needed for internal logic.
                 # For now, history entries will store status as strings as saved by the modified _save_upload_history.
-                # If internal logic strictly requires TaskStatus objects, conversion would be done here.
-                # Example:
-                # for entry in loaded_history:
-                #     if "status" in entry and isinstance(entry["status"], str):
-                #         try:
-                #             entry["status"] = TaskStatus(entry["status"])
-                #         except ValueError:
-                #             self.log_message(f"Unknown status value '{entry['status']}' in history. Keeping as string.")
-
                 self.upload_history = loaded_history
-                self.log_message(f"Loaded {len(self.upload_history)} items from JSON upload history.")
             except json.JSONDecodeError as e:
-                self.log_message(f"Error decoding upload history from JSON: {e}. Initializing empty history.")
+                self.log_message(f"DEBUG: Error decoding upload history from JSON: {e}. Raw string was: '{json_string}'. Initializing empty history.")
                 self.upload_history = []
-            except Exception as e: # Catch any other unexpected errors during load
-                self.log_message(f"Unexpected error loading upload history: {e}. Initializing empty history.")
+            except Exception as e:
+                self.log_message(f"DEBUG: Unexpected error loading/parsing upload history: {e}. Initializing empty history.")
                 self.upload_history = []
         else:
-            self.log_message("No JSON upload history found. Initializing empty history.")
+            self.log_message("DEBUG: No valid JSON upload history string found in settings. Initializing empty history.")
             self.upload_history = []
 
         # Ensure self.upload_history is always a list
         if not isinstance(self.upload_history, list):
-            self.log_message("Upload history was not a list after loading. Resetting to empty list.")
+            self.log_message(f"DEBUG: Upload history was not a list after loading (type: {type(self.upload_history)}). Resetting to empty list.")
             self.upload_history = []
+        self.log_message(f"DEBUG: _load_upload_history complete. Final history length: {len(self.upload_history)}")
 
 
     def _save_upload_history(self):
+        self.log_message(f"DEBUG: Attempting to save upload history. Current history length: {len(self.upload_history)}")
+        self.log_message(f"DEBUG: History content before dump: {self.upload_history}")
         try:
             # _add_to_upload_history now ensures 'status' is stored as a string value.
             # So, self.upload_history can be directly serialized.
-            json_string = json.dumps(self.upload_history)
+            json_string = json.dumps(self.upload_history, indent=2) # Added indent for readability if inspecting file
+            self.log_message(f"DEBUG: Serialized JSON string for history: {json_string}")
             self.settings.setValue("history/uploads_json", json_string)
-            # self.log_message("Upload history saved to settings as JSON.")
+            self.settings.sync() # Force write
+            status = self.settings.status()
+            self.log_message(f"DEBUG: QSettings.setValue for history done. QSettings status: {status}")
+            if status != QSettings.NoError:
+                self.log_message(f"ERROR: QSettings reported an error during history save: {status}")
+
         except TypeError as e:
-            self.log_message(f"Error serializing upload history to JSON: {e}")
+            self.log_message(f"DEBUG: Error serializing upload history to JSON: {e}")
         except Exception as e:
-            self.log_message(f"Unexpected error saving upload history: {e}")
+            self.log_message(f"DEBUG: Unexpected error saving upload history: {e}")
 
     def _get_video_url(self, video_id):
         if not self.configured_instance_url or not video_id:
@@ -979,6 +990,8 @@ class MainWindow(QMainWindow):
 
 
     def _add_to_upload_history(self, title, file_path, video_id, video_url, timestamp, status, channel_id, channel_name_hint):
+        entry_status_value = status.value if hasattr(status, 'value') else str(status)
+        self.log_message(f"DEBUG: Adding to upload history: Title='{title}', Status='{entry_status_value}'")
         # Create history entry
         entry = {
             "title": title,
@@ -986,20 +999,23 @@ class MainWindow(QMainWindow):
             "video_id": video_id,
             "video_url": video_url,
             "timestamp": timestamp, # Should be ISO format string or similar
-            "status": status.value if hasattr(status, 'value') else str(status), # Store enum value
+            "status": entry_status_value, # Store enum value as string
             "channel_id": channel_id,
             "channel_name_hint": channel_name_hint # Store a hint, actual name might change
         }
 
         self.upload_history.insert(0, entry) # Add to the beginning (most recent first)
+        self.log_message(f"DEBUG: History after insert (before trim): {self.upload_history}")
 
         # Keep history limited to 30 items
         max_history_items = 30
         if len(self.upload_history) > max_history_items:
             self.upload_history = self.upload_history[:max_history_items]
+            self.log_message(f"DEBUG: History trimmed to {max_history_items} items.")
 
+        self.log_message(f"DEBUG: History before calling _save_upload_history from _add_to_upload_history: {self.upload_history}")
         self._save_upload_history() # Persist after each addition
-        self.log_message(f"Added to upload history: '{title}'. History size: {len(self.upload_history)}.")
+        self.log_message(f"DEBUG: Added to upload history: '{title}'. New history size: {len(self.upload_history)}.")
 
 
     def _update_queue_control_button_states(self):
