@@ -258,12 +258,21 @@ class MainWindow(QMainWindow):
             # Optionally, clear the invalid saved path from settings
             # self.settings.remove("gui/lastLocalPath")
 
-        self.dir_model.setRootPath(saved_path)
-        self.dir_tree_view.setRootIndex(self.dir_model.index(saved_path))
+        # Set the dir_model to the filesystem root to allow full navigation
+        self.dir_model.setRootPath(QDir.rootPath())
+        self.dir_tree_view.setRootIndex(self.dir_model.index(QDir.rootPath())) # Should show drives etc.
 
+        # Now, try to navigate to the saved_path in the tree view
+        start_index = self.dir_model.index(saved_path)
+        if start_index.isValid():
+            self.dir_tree_view.scrollTo(start_index, QAbstractItemView.PositionAtTop)
+            self.dir_tree_view.setCurrentIndex(start_index)
+            self.dir_tree_view.expand(start_index)
+
+        # The file_model should still be rooted at the specific saved_path initially
         self.file_model.setRootPath(saved_path)
         self.file_list_view.setRootIndex(self.file_model.index(saved_path))
-        self.log_message(f"Local file browser initialized to: {saved_path}")
+        self.log_message(f"Local file browser tree initialized to filesystem root. Current path set to: {saved_path}")
 
     def _on_local_dir_selected(self, index):
         path = self.dir_model.filePath(index)
