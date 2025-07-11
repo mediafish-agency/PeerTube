@@ -25,11 +25,14 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("tadreb.live Video Uploader")
-        self.setGeometry(100, 100, 900, 750)
+        self.setGeometry(100, 100, 900, 750) # Initial size, user can resize with splitters
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.layout = QVBoxLayout(self.central_widget)
+        # self.layout will now be the top-level layout for the central_widget,
+        # and it will contain the main QSplitter.
+        self.overall_layout = QVBoxLayout(self.central_widget) # Renamed for clarity
+        self.central_widget.setLayout(self.overall_layout) # Explicitly set layout for central widget
 
         app_settings = settings.load_settings()
         self.configured_instance_url = app_settings.get('instance_url', '')
@@ -51,9 +54,52 @@ class MainWindow(QMainWindow):
         self.configured_username = app_settings.get('username', '')
         self.configured_password = app_settings.get('password', '')
 
-        self._create_top_section()
-        self._create_queue_section()
-        self._create_log_section()
+        # Create the content sections first
+        self.log_section_group = self._create_log_section()
+        self.video_details_group = self._create_top_section() # Consider renaming this method
+        self.queue_section_group = self._create_queue_section()
+
+        # Main vertical splitter
+        self.main_v_splitter = QSplitter(Qt.Vertical)
+        self.main_v_splitter.addWidget(self.log_section_group) # Pane 0 (Top)
+
+        # Horizontal splitter for middle content
+        self.middle_h_splitter = QSplitter(Qt.Horizontal)
+        self.middle_h_splitter.addWidget(self.video_details_group) # Add video details to left of h_splitter
+
+        # Placeholder for right pane of middle_h_splitter
+        self.right_middle_placeholder = QFrame() # Using QFrame for potential styling (e.g. border)
+        self.right_middle_placeholder.setFrameShape(QFrame.StyledPanel)
+        # Optional: Add a label to the placeholder
+        placeholder_layout = QVBoxLayout(self.right_middle_placeholder)
+        placeholder_label = QLabel("Right Pane Placeholder\n(Future content, e.g., selected channel details or video preview)")
+        placeholder_label.setAlignment(Qt.AlignCenter)
+        placeholder_layout.addWidget(placeholder_label)
+        self.right_middle_placeholder.setLayout(placeholder_layout)
+        self.middle_h_splitter.addWidget(self.right_middle_placeholder) # Add placeholder to right of h_splitter
+
+        self.main_v_splitter.addWidget(self.middle_h_splitter) # Pane 1 (Middle)
+
+        # Add Queue section to bottom of v_splitter
+        self.main_v_splitter.addWidget(self.queue_section_group) # Pane 2 (Bottom)
+
+        # Set initial sizes for the splitters to suggest a layout
+        # Main Vertical Splitter: Logs (15%), Middle (60%), Queue (25%)
+        total_height = self.geometry().height() # Or a fixed reasonable default like 750
+        log_height = int(total_height * 0.15)
+        middle_area_height = int(total_height * 0.60)
+        queue_height = int(total_height * 0.25)
+        self.main_v_splitter.setSizes([log_height, middle_area_height, queue_height])
+
+        # Middle Horizontal Splitter: Video Details (40%), Placeholder (60%)
+        total_width = self.geometry().width() # Or a fixed reasonable default like 900
+        details_width = int(total_width * 0.40)
+        placeholder_width = int(total_width * 0.60)
+        self.middle_h_splitter.setSizes([details_width, placeholder_width])
+
+        self.overall_layout.addWidget(self.main_v_splitter)
+
+
         self._create_status_bar() # Ensure status bar is created before attempting to update it
 
         self.log_message(f"Application started. Configured endpoint: {'Provided' if self.configured_instance_url else 'Not Provided'}.")
@@ -134,7 +180,8 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
 
         top_section_group.setLayout(top_layout)
-        self.layout.addWidget(top_section_group)
+        # self.overall_layout.addWidget(top_section_group) # Removed: Will be added to splitter
+        return top_section_group
 
     def _create_queue_section(self):
         queue_section_group = QGroupBox("Upload Queue")
@@ -170,7 +217,8 @@ class MainWindow(QMainWindow):
         queue_main_layout.addLayout(queue_control_buttons_layout)
 
         queue_section_group.setLayout(queue_main_layout)
-        self.layout.addWidget(queue_section_group)
+        # self.overall_layout.addWidget(queue_section_group) # Removed: Will be added to splitter
+        return queue_section_group
 
     def _create_log_section(self):
         log_section_group = QGroupBox("Logs")
@@ -179,8 +227,9 @@ class MainWindow(QMainWindow):
         self.log_output_area.setReadOnly(True)
         log_layout.addWidget(self.log_output_area)
         log_section_group.setLayout(log_layout)
-        self.layout.addWidget(log_section_group)
-        self.layout.setStretchFactor(log_section_group, 1)
+        # self.overall_layout.addWidget(log_section_group) # Removed: Will be added to splitter
+        # self.overall_layout.setStretchFactor(log_section_group, 1) # Removed: Splitter handles stretch
+        return log_section_group
 
     def _update_connection_status_indicator(self, connected, event_message=""):
         # connected: True (green), False (red), None (neutral/yellow for connecting)
