@@ -40,6 +40,7 @@ class UploadQueueManager:
         self.peertube_client = peertube_client
         self.current_task = None
         self.is_processing = False
+        self.is_manually_paused = False # New attribute for pause/resume state
         self.stop_event = threading.Event()
         self.queue_lock = threading.Lock()
         self.task_id_counter = 0
@@ -95,62 +96,197 @@ class UploadQueueManager:
 
         if not self.is_processing:
             self.start_processing()
+        # If it is processing but was paused, adding a task might implicitly resume
+        # or user has to explicitly resume. For now, let's assume explicit resume.
         return task.task_id
 
     def start_processing(self):
-        if self.is_processing:
-            self._log("Processing already started.")
+        if self.is_processing and self.processing_thread and self.processing_thread.is_alive():
+            self._log("Processing already started or thread active.")
+            if self.is_manually_paused:
+                 self._log("Queue is paused. Call resume_processing() to start uploads.")
             return
 
         if not self.peertube_client or not self.peertube_client.access_token:
             self._log("Cannot start processing: PeerTube client not authenticated.")
-            # Potentially signal GUI to prompt for authentication
             return
 
-        self.is_processing = True
+        self.is_processing = True # Overall manager is active
+        self.is_manually_paused = False # Explicitly not paused on fresh start
         self.stop_event.clear()
-        self.processing_thread = threading.Thread(target=self._process_queue, daemon=True)
-        self.processing_thread.start()
-        self._log("Started queue processing thread.")
 
-    def stop_processing(self):
-        self._log("Stopping queue processing...")
-        self.is_processing = False
-        self.stop_event.set()
+        # Ensure only one processing thread is started
+        if not self.processing_thread or not self.processing_thread.is_alive():
+            self.processing_thread = threading.Thread(target=self._process_queue, daemon=True)
+            self.processing_thread.start()
+            self._log("Started queue processing thread.")
+        else:
+            self._log("Processing thread already exists and is alive.")
+
+
+    def pause_processing(self):
+        """Pauses the scheduling of new tasks. Currently active task will continue its current operation."""
+        if not self.is_processing:
+            self._log("Cannot pause, processing is not active.")
+            return
+        if self.is_manually_paused:
+            self._log("Processing is already paused.")
+            return
+
+        self.is_manually_paused = True
+        self._log("Queue processing paused. Active task will continue its current chunk/operation.")
+        # Note: This simple pause doesn't actively interrupt the current task's _handle_upload.
+        # _handle_upload only checks stop_event for hard stops.
+        # A more aggressive pause might set stop_event and then clear it on resume,
+        # but that could cancel the current task's resumable upload.
+
+    def resume_processing(self):
+        """Resumes the scheduling of tasks if the queue was manually paused."""
+        if not self.is_processing:
+            self._log("Cannot resume, processing is not set to active overall.")
+            # Potentially call start_processing() here if that's desired behavior for resuming a non-active queue
+            # self.start_processing()
+            return
+
+        if not self.is_manually_paused:
+            self._log("Processing is not paused.")
+            return
+
+        self.is_manually_paused = False
+        self._log("Queue processing resumed.")
+        # If the processing thread is alive, it will pick up tasks in its next loop iteration.
+        # If the thread died for some reason and self.is_processing is true, start_processing might be needed.
+        # For simplicity, we assume _process_queue loop continues if self.is_processing is true.
+        # We might need to signal the _process_queue's wait condition if it's sleeping.
+        # However, the current _process_queue loop with time.sleep(2) will naturally pick up.
+        # If start_processing wasn't called or thread died, ensure it's running:
+        if not self.processing_thread or not self.processing_thread.is_alive():
+            self._log("Processing thread was not alive. Restarting it for resume.")
+            self.start_processing() # This will re-initialize the thread if needed.
+
+
+    def stop_processing(self): # This is a "soft" stop, mainly for app shutdown
+        self._log("Stopping queue processing (soft stop)...")
+        self.is_processing = False # Prevent _process_queue loop from continuing after current task
+        self.is_manually_paused = False # Clear pause state
+        self.stop_event.set() # Signal current _handle_upload to stop (and cancel resumable)
+
+        # Wait for the processing thread to finish its current task and exit its loop
         if self.processing_thread and self.processing_thread.is_alive():
-            # If current task is resumable, consider cancelling it on PeerTube
-            if self.current_task and self.current_task.resumable_upload_id:
-                self._log(f"Attempting to cancel ongoing resumable upload {self.current_task.resumable_upload_id} for task {self.current_task.task_id}")
-                # This cancel needs to be non-blocking or handled carefully if stop_processing is called from main thread
-                # For now, let's assume it's quick or the worker thread handles it upon seeing stop_event
-            self.processing_thread.join(timeout=10) # Wait for thread to finish
+            self.processing_thread.join(timeout=15) # Increased timeout slightly
+
+        if self.processing_thread and self.processing_thread.is_alive():
+            self._log("Warning: Processing thread did not terminate cleanly after stop signal.")
+
+        self.processing_thread = None # Clear the thread reference
         self._log("Queue processing stopped.")
+
+
+    def stop_all_and_clear_tasks(self):
+        self._log("Stopping all tasks and clearing queue...")
+        self.is_manually_paused = True # Prevent any new scheduling attempts during this operation
+
+        # Signal the current task (if any) to stop and cancel its resumable upload
+        self.stop_event.set()
+
+        # If a processing thread is active, tell it to stop fully and wait for it
+        # This ensures the current_task's _handle_upload gets the stop_event signal
+        if self.processing_thread and self.processing_thread.is_alive():
+            self.is_processing = False # Stop the main loop of _process_queue
+            self.processing_thread.join(timeout=15)
+            if self.processing_thread and self.processing_thread.is_alive():
+                 self._log("Warning: Processing thread did not stop cleanly during stop_all_and_clear_tasks.")
+            self.processing_thread = None
+
+        # Now that the processing loop is stopped (or was never running), clear the queue
+        tasks_to_notify_gui_about = []
+        with self.queue_lock:
+            tasks_to_notify_gui_about = list(self.queue) # Get a copy
+            self.queue.clear()
+            if self.current_task: # If there was a task being processed when stop_event was set
+                # It might not be in self.queue anymore if _process_queue removed it before stopping.
+                # Ensure its resumable upload is cancelled if it has one and wasn't completed/failed.
+                if self.current_task.resumable_upload_id and \
+                   self.current_task.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+                    self._log(f"Ensuring cancellation of active task {self.current_task.task_id} on PeerTube.")
+                    self.peertube_client.cancel_resumable_upload(self.current_task.resumable_upload_id)
+                # Add it to notification list if not already (e.g. if it was the current_task)
+                # This is tricky because its status might have been set to CANCELLED by _handle_upload
+                # For simplicity, we'll rely on the GUI being updated for tasks in `tasks_to_notify_gui_about`
+                # and the current_task's update from _handle_upload.
+                self.current_task = None
+
+        # Notify GUI to remove all tasks that were in the queue
+        if self.status_update_callback:
+            for task_obj in tasks_to_notify_gui_about:
+                # Update status to CANCELLED before notifying for removal, if not already failed/completed
+                if task_obj.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+                    task_obj.status = TaskStatus.CANCELLED
+                    task_obj.error_message = "Queue cleared by user."
+
+                self.status_update_callback(
+                    task_obj.task_id, task_obj.status, task_obj.progress,
+                    task_obj.video_id_on_peertube, task_obj.error_message,
+                    False, task_obj.file_path, task_obj.title, task_obj.channel_id,
+                    True # is_removed = True
+                )
+
+        self.is_processing = False # Ensure manager is fully stopped
+        self.is_manually_paused = False # Reset pause state
+        self.stop_event.clear() # Clear for future operations
+        self._log("All tasks stopped and queue cleared.")
+        # The queue manager is now idle. It will restart if add_task is called and is_processing is false.
 
 
     def _process_queue(self):
         while self.is_processing and not self.stop_event.is_set():
+            if self.is_manually_paused:
+                time.sleep(1) # Sleep while paused
+                continue
+
             task_to_process = None
             with self.queue_lock:
-                if self.queue:
-                    # Find first PENDING task
-                    for task_in_q in self.queue:
-                        if task_in_q.status == TaskStatus.PENDING:
-                            task_to_process = task_in_q
-                            break
+                # Find first PENDING task
+                for task_in_q in self.queue:
+                    if task_in_q.status == TaskStatus.PENDING:
+                        task_to_process = task_in_q
+                        break
 
             if task_to_process:
-                self.current_task = task_to_process
+                self.current_task = task_to_process # Set current task
+                # No need to remove from queue here, _handle_upload doesn't modify queue
                 self._log(f"Processing task: {self.current_task.title} (ID: {self.current_task.task_id})")
                 self._handle_upload(self.current_task)
-                self.current_task = None # Clear current task after handling
-            else:
-                if not self.queue and self.is_processing: # Queue is empty, but manager is still "on"
-                    self._log("Queue is empty. Waiting for new tasks...")
-                time.sleep(2)  # Wait before checking queue again if empty or no pending tasks
+
+                # After _handle_upload finishes (completes, fails, or cancels itself due to stop_event):
+                with self.queue_lock:
+                    if self.current_task and self.current_task.task_id == task_to_process.task_id:
+                        # If the task wasn't removed by another operation (e.g. explicit remove_task call)
+                        # and its status indicates it should be removed from pending (e.g. not pending anymore)
+                        # This part is tricky because PENDING tasks are not removed from self.queue until processed.
+                        # The current logic is that _handle_upload sets the final status.
+                        # The queue only contains PENDING tasks that are waiting, or tasks that are being processed.
+                        # Let's simplify: _process_queue picks a PENDING task. _handle_upload changes its status.
+                        # The task remains in self.queue until explicitly removed by user (remove_task, clear_completed)
+                        # or by stop_all_and_clear_tasks.
+                        pass # Task remains in queue with its new status.
+                    self.current_task = None # Clear current task reference
+            else: # No PENDING tasks found
+                if self.is_processing: # Still active but no work to do right now
+                    # self._log("No pending tasks to process. Waiting...") # Too noisy
+                    pass
+                time.sleep(1) # Wait before checking queue again
+
         self._log("Exited processing loop.")
         self.is_processing = False # Ensure state is correct on exit
+        self.current_task = None # Clear current task if loop exits
+
 
     def _handle_upload(self, task: VideoUploadTask):
+        if self.stop_event.is_set(): # Check if stop was requested before even starting this task
+            self._update_task_status(task, TaskStatus.CANCELLED, error="Cancelled before start.")
+            return
+
         self._update_task_status(task, TaskStatus.INITIALIZING)
         task.total_size = os.path.getsize(task.file_path)
 

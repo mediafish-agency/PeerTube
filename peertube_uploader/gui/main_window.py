@@ -143,15 +143,31 @@ class MainWindow(QMainWindow):
         self.upload_queue_listwidget = QListWidget()
         queue_main_layout.addWidget(self.upload_queue_listwidget)
 
-        queue_buttons_layout = QHBoxLayout()
+        # Layout for existing buttons (Remove, Clear Completed)
+        item_management_buttons_layout = QHBoxLayout()
         self.remove_selected_button = QPushButton("Remove Selected Task")
         self.remove_selected_button.clicked.connect(self.remove_selected_task_from_queue)
         self.clear_completed_button = QPushButton("Clear Completed Tasks")
         self.clear_completed_button.clicked.connect(self.clear_completed_tasks_in_queue)
+        item_management_buttons_layout.addWidget(self.remove_selected_button)
+        item_management_buttons_layout.addWidget(self.clear_completed_button)
+        queue_main_layout.addLayout(item_management_buttons_layout)
 
-        queue_buttons_layout.addWidget(self.remove_selected_button)
-        queue_buttons_layout.addWidget(self.clear_completed_button)
-        queue_main_layout.addLayout(queue_buttons_layout)
+        # Layout for new queue control buttons (Start/Pause, Stop All)
+        queue_control_buttons_layout = QHBoxLayout()
+        self.start_pause_button = QPushButton("Pause Queue") # Initial text, assuming auto-start
+        # self.start_pause_button.clicked.connect(self._on_start_pause_queue_clicked) # Connect later
+        self.start_pause_button.clicked.connect(self._on_start_pause_queue_clicked)
+        self.start_pause_button.setEnabled(False) # Disabled until tasks are present and manager is running
+
+        self.stop_all_clear_button = QPushButton("Stop All & Clear Queue")
+        # self.stop_all_clear_button.clicked.connect(self._on_stop_all_clear_queue_clicked) # Connect later
+        self.stop_all_clear_button.clicked.connect(self._on_stop_all_clear_queue_clicked)
+        self.stop_all_clear_button.setEnabled(False) # Disabled until tasks are present
+
+        queue_control_buttons_layout.addWidget(self.start_pause_button)
+        queue_control_buttons_layout.addWidget(self.stop_all_clear_button)
+        queue_main_layout.addLayout(queue_control_buttons_layout)
 
         queue_section_group.setLayout(queue_main_layout)
         self.layout.addWidget(queue_section_group)
@@ -460,6 +476,7 @@ class MainWindow(QMainWindow):
 
         self.file_path_input.clear()
         self.title_input.clear()
+        self._update_queue_control_button_states() # Update button states
 
     def handle_task_update_signal(self, task_id, status_enum, progress, video_id, error_message, is_new, file_path, title, channel_id_from_cb, is_removed):
         if is_removed:
@@ -547,6 +564,8 @@ class MainWindow(QMainWindow):
                 if video_id_text_segment in current_label_text:
                      task_gui_parts['label'].setText(current_label_text.replace(video_id_text_segment, ""))
 
+        self._update_queue_control_button_states() # Update buttons after any task update
+
 
     def remove_selected_task_from_queue(self):
         selected_list_items = self.upload_queue_listwidget.selectedItems()
@@ -603,6 +622,7 @@ class MainWindow(QMainWindow):
                 # Manager will emit signal which will remove it from GUI via handle_task_update_signal
                 self.queue_manager.remove_task(task_id)
             self.log_message(f"Requested removal of {len(tasks_to_remove_ids)} completed tasks.")
+        self._update_queue_control_button_states() # Update button states, as completed tasks are removed
 
 
     def closeEvent(self, event):
@@ -610,6 +630,88 @@ class MainWindow(QMainWindow):
         if self.queue_manager:
             self.queue_manager.stop_processing()
         super().closeEvent(event)
+
+    def _update_queue_control_button_states(self):
+        """Updates the enabled state and text of queue control buttons."""
+        if not self.queue_manager or not self.queue_manager.queue: # No queue manager or queue is empty
+            self.start_pause_button.setEnabled(False)
+            self.start_pause_button.setText("Pause Queue") # Or "Start Queue" - needs consistent logic
+            self.stop_all_clear_button.setEnabled(False)
+            self.remove_selected_button.setEnabled(False)
+            self.clear_completed_button.setEnabled(False)
+            return
+
+        # If there are tasks in the queue
+        self.stop_all_clear_button.setEnabled(True)
+        self.remove_selected_button.setEnabled(True) # Assuming selection enables this further
+
+        # Check if there are any completed tasks to enable clear_completed_button
+        has_completed = any(task.status == TaskStatus.COMPLETED for task in self.queue_manager.queue)
+        self.clear_completed_button.setEnabled(has_completed)
+
+        if self.queue_manager.is_processing:
+            self.start_pause_button.setEnabled(True)
+            if self.queue_manager.is_manually_paused:
+                self.start_pause_button.setText("Resume Queue")
+            else:
+                self.start_pause_button.setText("Pause Queue")
+        else: # Not currently processing (e.g. all tasks done, or stopped)
+            # If there are pending tasks, button should say "Start Queue"
+            has_pending = any(task.status == TaskStatus.PENDING for task in self.queue_manager.queue)
+            if has_pending:
+                self.start_pause_button.setText("Start Queue")
+                self.start_pause_button.setEnabled(True)
+            else: # No pending tasks, queue is effectively idle or all done/failed
+                self.start_pause_button.setText("Pause Queue") # Or "Queue Idle"
+                self.start_pause_button.setEnabled(False)
+
+
+    def _on_start_pause_queue_clicked(self):
+        if not self.queue_manager:
+            self.log_message("Queue manager not available.")
+            return
+
+        if self.queue_manager.is_processing and not self.queue_manager.is_manually_paused:
+            self.queue_manager.pause_processing()
+            self.log_message("User paused queue processing.")
+        elif self.queue_manager.is_manually_paused:
+            self.queue_manager.resume_processing()
+            self.log_message("User resumed queue processing.")
+        elif not self.queue_manager.is_processing: # Not processing, and not paused -> must be "Start Queue"
+            # This case implies the queue was stopped (e.g. all tasks done, or stop_all)
+            # and there are new pending tasks.
+            # Ensure there are tasks to start; add_task should handle initial start.
+            # This button might primarily toggle between pause/resume once processing has begun.
+            # If queue_manager.start_processing() is idempotent or handles this, it's fine.
+            # Let's assume if it's not processing and not paused, it means "Start"
+            has_pending = any(task.status == TaskStatus.PENDING for task in self.queue_manager.queue)
+            if has_pending:
+                self.log_message("User started queue processing.")
+                self.queue_manager.start_processing() # This will also reset is_manually_paused
+            else:
+                self.log_message("Start Queue clicked, but no pending tasks.")
+
+        self._update_queue_control_button_states()
+
+
+    def _on_stop_all_clear_queue_clicked(self):
+        if not self.queue_manager:
+            self.log_message("Queue manager not available for stop all.")
+            return
+        if not self.queue_manager.queue: # Check if queue is empty
+            QMessageBox.information(self, "Queue Empty", "The upload queue is already empty.")
+            return
+
+        confirm = QMessageBox.question(self, "Confirm Stop All & Clear",
+                                       "Are you sure you want to stop all ongoing uploads and clear the entire queue?\n"
+                                       "This action cannot be undone.",
+                                       QMessageBox.Yes | QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            self.log_message("User confirmed Stop All & Clear Queue.")
+            self.queue_manager.stop_all_and_clear_tasks()
+            # GUI updates for task removal are handled by callback from stop_all_and_clear_tasks
+
+        self._update_queue_control_button_states()
 
 
 if __name__ == '__main__':
