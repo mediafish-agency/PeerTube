@@ -237,6 +237,48 @@ class UploadQueueManager:
         self._log("All tasks stopped and queue cleared.")
         # The queue manager is now idle. It will restart if add_task is called and is_processing is false.
 
+    def reorder_queue(self, new_task_id_order: list[int]):
+        """
+        Reorders the internal queue based on a new list of task IDs.
+        Only PENDING tasks are effectively reordered in terms of processing sequence.
+        """
+        if not new_task_id_order and not self.queue: # Both empty, nothing to do
+            return
+
+        with self.queue_lock:
+            self._log(f"Attempting to reorder queue. Current order: {[t.task_id for t in self.queue]}. New visual order: {new_task_id_order}")
+
+            current_tasks_map = {task.task_id: task for task in self.queue}
+            new_ordered_queue = []
+
+            processed_ids_in_new_order = set()
+
+            # First, add tasks based on the new_task_id_order
+            for task_id in new_task_id_order:
+                if task_id in current_tasks_map:
+                    new_ordered_queue.append(current_tasks_map[task_id])
+                    processed_ids_in_new_order.add(task_id)
+                else:
+                    self._log(f"Warning: Task ID {task_id} from new order not found in current queue.")
+
+            # Add any tasks that were in the old queue but somehow not in new_task_id_order
+            # (e.g. if GUI list was out of sync, or to preserve tasks not visible/mapped)
+            # This usually shouldn't happen if new_task_id_order comes from a complete GUI list.
+            # These tasks are typically appended to maintain their existence, their relative order preserved.
+            for task in self.queue:
+                if task.task_id not in processed_ids_in_new_order:
+                    self._log(f"Warning: Task ID {task.task_id} from old queue not in new order. Appending it.")
+                    new_ordered_queue.append(task)
+
+            self.queue = new_ordered_queue
+            self._log(f"Queue reordered. New internal order: {[t.task_id for t in self.queue]}")
+
+        # After reordering, if the queue is not paused and processing is active,
+        # the _process_queue loop will naturally pick tasks based on the new order
+        # when it looks for the next PENDING task.
+        # No explicit call to _process_queue or _schedule_tasks is needed here as the
+        # existing _process_queue loop will handle it. If it was paused, it will respect that.
+
 
     def _process_queue(self):
         while self.is_processing and not self.stop_event.is_set():

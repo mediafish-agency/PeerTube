@@ -727,6 +727,39 @@ class MainWindow(QMainWindow):
 
         self._update_queue_control_button_states()
 
+    def _on_queue_rows_moved(self, parent_index, start_row, end_row, destination_index, dest_row):
+        """
+        Called when rows (tasks) are moved in the upload_queue_listwidget
+        due to drag and drop.
+        Updates the internal queue order in UploadQueueManager.
+        """
+        self.log_message(f"Queue rows moved: from {start_row}-{end_row} to {dest_row} under destination {destination_index.row()}")
+
+        if not self.queue_manager:
+            self.log_message("Error: Queue manager not available for reordering.")
+            return
+
+        new_task_id_order = []
+        for i in range(self.upload_queue_listwidget.count()):
+            list_item = self.upload_queue_listwidget.item(i)
+            # Find the task_id associated with this list_item.
+            # self.task_widgets stores {task_id: {'item': QListWidgetItem, ...}}
+            task_id_found = None
+            for tid, widget_data in self.task_widgets.items():
+                if isinstance(widget_data, dict) and widget_data.get('item') == list_item:
+                    task_id_found = tid
+                    break
+            if task_id_found is not None:
+                new_task_id_order.append(task_id_found)
+            else:
+                self.log_message(f"Warning: Could not find task_id for list item at visual row {i} during reorder.")
+
+        if new_task_id_order:
+            self.log_message(f"New visual task ID order: {new_task_id_order}")
+            self.queue_manager.reorder_queue(new_task_id_order)
+        else:
+            self.log_message("Warning: No task IDs collected after reorder, queue not updated in manager.")
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
