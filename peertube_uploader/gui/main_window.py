@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QSplitter, QFrame, QAbstractItemView, QTreeView, QListView, # Added QTreeView, QListView
                              QFileSystemModel, QStyle) # Added QFileSystemModel, QStyle
 import datetime # For timestamping history
+import json # For serializing history data
 from PyQt5.QtGui import QIcon # Import QIcon
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QDir, QSettings # Import QThread, QDir, QSettings
 from api.peertube_client import PeerTubeClient
@@ -34,8 +35,13 @@ class MainWindow(QMainWindow):
         # Using generic names; replace "YourOrg" and "PeerTubeUploader" as appropriate
         self.settings = QSettings("PeerTubeUploaderOrg", "PeerTubeUploaderApp")
 
+        # One-time cleanup of old history key, if it exists
+        if self.settings.contains("history/uploads"):
+            self.settings.remove("history/uploads")
+            self.log_message("Removed old format upload history key 'history/uploads'.")
+
         self.upload_history = []
-        self._load_upload_history()
+        self._load_upload_history() # Loads from "history/uploads_json"
 
         self.setGeometry(100, 100, 900, 750) # Initial size, user can resize with splitters
 
@@ -907,17 +913,50 @@ class MainWindow(QMainWindow):
         self.log_message("Application closed.")
 
     def _load_upload_history(self):
-        history = self.settings.value("history/uploads", [])
-        if isinstance(history, list): # Basic check
-            self.upload_history = history
-            self.log_message(f"Loaded {len(self.upload_history)} items from upload history.")
+        json_string = self.settings.value("history/uploads_json", None)
+        if json_string:
+            try:
+                loaded_history = json.loads(json_string)
+                # Optional: Convert status strings back to TaskStatus enums if needed for internal logic.
+                # For now, history entries will store status as strings as saved by the modified _save_upload_history.
+                # If internal logic strictly requires TaskStatus objects, conversion would be done here.
+                # Example:
+                # for entry in loaded_history:
+                #     if "status" in entry and isinstance(entry["status"], str):
+                #         try:
+                #             entry["status"] = TaskStatus(entry["status"])
+                #         except ValueError:
+                #             self.log_message(f"Unknown status value '{entry['status']}' in history. Keeping as string.")
+
+                self.upload_history = loaded_history
+                self.log_message(f"Loaded {len(self.upload_history)} items from JSON upload history.")
+            except json.JSONDecodeError as e:
+                self.log_message(f"Error decoding upload history from JSON: {e}. Initializing empty history.")
+                self.upload_history = []
+            except Exception as e: # Catch any other unexpected errors during load
+                self.log_message(f"Unexpected error loading upload history: {e}. Initializing empty history.")
+                self.upload_history = []
         else:
-            self.log_message("Could not load upload history or history is malformed.")
-            self.upload_history = [] # Ensure it's a list
+            self.log_message("No JSON upload history found. Initializing empty history.")
+            self.upload_history = []
+
+        # Ensure self.upload_history is always a list
+        if not isinstance(self.upload_history, list):
+            self.log_message("Upload history was not a list after loading. Resetting to empty list.")
+            self.upload_history = []
+
 
     def _save_upload_history(self):
-        self.settings.setValue("history/uploads", self.upload_history)
-        # self.log_message("Upload history saved to settings.") # Logged by caller or closeEvent
+        try:
+            # _add_to_upload_history now ensures 'status' is stored as a string value.
+            # So, self.upload_history can be directly serialized.
+            json_string = json.dumps(self.upload_history)
+            self.settings.setValue("history/uploads_json", json_string)
+            # self.log_message("Upload history saved to settings as JSON.")
+        except TypeError as e:
+            self.log_message(f"Error serializing upload history to JSON: {e}")
+        except Exception as e:
+            self.log_message(f"Unexpected error saving upload history: {e}")
 
     def _get_video_url(self, video_id):
         if not self.configured_instance_url or not video_id:
