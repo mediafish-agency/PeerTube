@@ -4,8 +4,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QLabel, QLineEdit, QPushButton, QFileDialog,
                              QComboBox, QGroupBox, QTextEdit, QListWidget, QListWidgetItem,
                              QInputDialog, QMessageBox, QStatusBar, QProgressBar,
-                             QSplitter, QFrame, QAbstractItemView) # Added QAbstractItemView
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread # Import QThread
+                             QSplitter, QFrame, QAbstractItemView, QTreeView, QListView, # Added QTreeView, QListView
+                             QFileSystemModel) # Added QFileSystemModel
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QDir # Import QThread, QDir
 from api.peertube_client import PeerTubeClient
 from core.queue_manager import UploadQueueManager, TaskStatus # Import UploadQueueManager and TaskStatus
 from config import settings # Import the settings module
@@ -61,10 +62,30 @@ class MainWindow(QMainWindow):
         self.main_v_splitter.addWidget(self.log_section_group)
 
         self.middle_h_splitter = QSplitter(Qt.Horizontal)
-        self.middle_h_splitter.addWidget(self.video_details_group)
+        # self.middle_h_splitter.addWidget(self.video_details_group) # This will be added to a new sub-splitter
+
+        # Create Local File Browser
+        self.local_file_browser_group = self._create_local_file_browser_group()
+
+        # New sub-splitter for Local File Browser and Video Details
+        self.left_pane_splitter = QSplitter(Qt.Horizontal)
+        self.left_pane_splitter.addWidget(self.local_file_browser_group)
+        self.left_pane_splitter.addWidget(self.video_details_group)
+
+        self.middle_h_splitter.addWidget(self.left_pane_splitter) # Add sub-splitter to the main middle splitter
 
         self.channel_browser_group = QGroupBox("Available Channels")
         channel_browser_layout = QVBoxLayout()
+
+        # Create and add the channel search input directly here
+        self.channel_search_input = QLineEdit()
+        self.channel_search_input.setPlaceholderText("Search channels by name or handle...")
+        self.channel_search_input.textChanged.connect(self._on_channel_search_changed)
+        search_channel_layout = QHBoxLayout() # Use a QHBoxLayout for label and input
+        search_channel_layout.addWidget(QLabel("Search:")) # Keep it concise
+        search_channel_layout.addWidget(self.channel_search_input)
+        channel_browser_layout.addLayout(search_channel_layout) # Add the layout
+
         self.channel_list_widget = QListWidget()
         self.channel_list_widget.currentItemChanged.connect(self._on_channel_list_selection_changed)
         channel_browser_layout.addWidget(self.channel_list_widget)
@@ -81,14 +102,32 @@ class MainWindow(QMainWindow):
         self.main_v_splitter.setSizes([log_height, middle_area_height, queue_height])
 
         total_width = self.geometry().width()
-        details_width = int(total_width * 0.40)
-        placeholder_width = int(total_width * 0.60) # For channel browser
-        self.middle_h_splitter.setSizes([details_width, placeholder_width])
+        # Adjust splitter for the new local browser, video details, and channel browser
+        # middle_h_splitter now contains left_pane_splitter and channel_browser_group
+        # left_pane_splitter contains local_file_browser_group and video_details_group
+
+        # Proportions for middle_h_splitter (left_pane_splitter vs channel_browser_group)
+        left_pane_width = int(total_width * 0.65)
+        channel_browser_width = int(total_width * 0.35)
+        self.middle_h_splitter.setSizes([left_pane_width, channel_browser_width])
+
+        # Proportions for left_pane_splitter (local_file_browser vs video_details)
+        local_browser_width_ratio = 0.5
+        video_details_width_ratio = 0.5
+        self.left_pane_splitter.setSizes([int(left_pane_width * local_browser_width_ratio),
+                                          int(left_pane_width * video_details_width_ratio)])
+
 
         self.overall_layout.addWidget(self.main_v_splitter)
         self._create_status_bar()
 
+        # The channel_search_input and its label are now created in _create_top_section but added to channel_browser_layout here
+        # We need to ensure channel_search_input is initialized before being used in _on_channel_search_changed if load_channels is called early.
+        # However, _create_top_section is called before channel_browser_group is fully set up.
+        # Let's move the creation of search_layout directly into the channel_browser_group setup.
+
         self.log_message(f"Application started. Configured endpoint: {'Provided' if self.configured_instance_url else 'Not Provided'}.")
+        self._initialize_local_file_browser() # Initialize the file browser content
 
         if self.configured_instance_url and self.configured_username:
             self._attempt_auto_connection()
@@ -101,6 +140,72 @@ class MainWindow(QMainWindow):
 
         self._update_add_to_queue_button_state()
         self._update_queue_control_button_states()
+
+    def _create_local_file_browser_group(self):
+        group = QGroupBox("Local File Browser")
+        layout = QVBoxLayout()
+
+        # Directory Tree View
+        self.dir_tree_view = QTreeView()
+        self.dir_model = QFileSystemModel()
+        self.dir_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs)
+        self.dir_tree_view.setModel(self.dir_model)
+        self.dir_tree_view.setHeaderHidden(True) # Hide header for cleaner look
+        for i in range(1, self.dir_model.columnCount()): # Hide all columns except the name
+            self.dir_tree_view.hideColumn(i)
+        self.dir_tree_view.clicked.connect(self._on_local_dir_selected)
+
+        # Files List View
+        self.file_list_view = QListView()
+        self.file_model = QFileSystemModel()
+        self.file_model.setFilter(QDir.NoDotAndDotDot | QDir.Files)
+        # Define video file extensions - add more as needed
+        video_extensions = ["*.mp4", "*.avi", "*.mkv", "*.mov", "*.webm", "*.flv", "*.wmv"]
+        self.file_model.setNameFilters(video_extensions)
+        self.file_model.setNameFilterDisables(False) # Ensure filter is active
+
+        self.file_list_view.setModel(self.file_model)
+        self.file_list_view.setEditTriggers(QAbstractItemView.NoEditTriggers) # Make it read-only
+        self.file_list_view.doubleClicked.connect(self._on_local_file_double_clicked)
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.dir_tree_view)
+        splitter.addWidget(self.file_list_view)
+        splitter.setSizes([200, 300]) # Initial sizes for dir tree and file list
+
+        layout.addWidget(splitter)
+        group.setLayout(layout)
+        return group
+
+    def _initialize_local_file_browser(self):
+        # Set initial path for directory tree (e.g., user's home directory)
+        home_path = QDir.homePath()
+        self.dir_model.setRootPath(home_path)
+        self.dir_tree_view.setRootIndex(self.dir_model.index(home_path))
+
+        # Set initial path for file list (same as directory tree)
+        self.file_model.setRootPath(home_path)
+        self.file_list_view.setRootIndex(self.file_model.index(home_path))
+        self.log_message(f"Local file browser initialized to: {home_path}")
+
+    def _on_local_dir_selected(self, index):
+        path = self.dir_model.filePath(index)
+        self.file_list_view.setRootIndex(self.file_model.setRootPath(path))
+        self.log_message(f"Local directory selected: {path}")
+
+    def _on_local_file_double_clicked(self, index):
+        file_path = self.file_model.filePath(index)
+        if os.path.isfile(file_path): # Ensure it's a file
+            self.file_path_input.setText(file_path)
+            self.log_message(f"Local file selected via browser: {file_path}")
+
+            # Automatically set title from filename (reuse logic from browse_file)
+            base_name = os.path.basename(file_path)
+            title_without_extension, _ = os.path.splitext(base_name)
+            self.title_input.setText(title_without_extension)
+
+            self._update_add_to_queue_button_state()
+            self.show_status_message(f"File selected: {os.path.basename(file_path)}", 2000)
 
 
     def _create_status_bar(self):
@@ -126,13 +231,8 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(browse_button)
         top_layout.addLayout(file_layout)
 
-        search_layout = QHBoxLayout()
-        self.channel_search_input = QLineEdit()
-        self.channel_search_input.setPlaceholderText("Search channels by name or handle...")
-        self.channel_search_input.textChanged.connect(self._on_channel_search_changed)
-        search_layout.addWidget(QLabel("Search Channel:"))
-        search_layout.addWidget(self.channel_search_input)
-        top_layout.addLayout(search_layout)
+        # The search_layout related to channel search is now moved to the channel browser group.
+        # self.channel_search_input is initialized there.
 
         title_layout = QHBoxLayout()
         self.title_input = QLineEdit()
@@ -451,7 +551,14 @@ class MainWindow(QMainWindow):
             self.file_path_input.setText(file_name)
             self.log_message(f"Selected file: {file_name}")
             self.show_status_message(f"File selected: {os.path.basename(file_name)}", 2000)
-            self._update_add_to_queue_button_state()
+
+            # Automatically set title from filename
+            base_name = os.path.basename(file_name)
+            title_without_extension, _ = os.path.splitext(base_name)
+            self.title_input.setText(title_without_extension)
+            # self.title_input.textChanged.emit(self.title_input.text()) # Ensure dependent actions trigger if any
+
+            self._update_add_to_queue_button_state() # This will also check title validity
 
     def add_to_queue(self):
         if not self.queue_manager:
