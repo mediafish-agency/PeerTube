@@ -126,7 +126,7 @@ class PeerTubeClient:
             print(f"User is Admin/Moderator (Role: {self.user_role_id}). Fetching all video channels...")
             all_channels_list = []
             start = 0
-            count = 50
+            count = 100  # Increased count for efficiency with potentially large channel lists
             total_expected = -1
 
             while True:

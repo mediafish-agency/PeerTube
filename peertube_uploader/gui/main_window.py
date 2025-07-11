@@ -40,7 +40,8 @@ class MainWindow(QMainWindow):
 
         self.peertube_client = None
         self.queue_manager = None
-        self.user_channels = []
+        self.user_channels = [] # Will store the list of channels for the combo box (filtered and sorted)
+        self.full_channel_list = [] # Will store the complete list of channels from API before filtering/sorting
         self.task_widgets = {}
 
         self.gui_signals = GuiSignalEmitter()
@@ -98,6 +99,15 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(self.file_path_input)
         file_layout.addWidget(browse_button)
         top_layout.addLayout(file_layout)
+
+        # Channel Search Input
+        search_layout = QHBoxLayout()
+        self.channel_search_input = QLineEdit()
+        self.channel_search_input.setPlaceholderText("Search channels by name or handle...")
+        self.channel_search_input.textChanged.connect(self._on_channel_search_changed) # Connect the signal
+        search_layout.addWidget(QLabel("Search Channel:"))
+        search_layout.addWidget(self.channel_search_input)
+        top_layout.addLayout(search_layout)
 
         # Channel Selection
         channel_layout = QHBoxLayout()
@@ -293,52 +303,114 @@ class MainWindow(QMainWindow):
         self.log_message("Loading channels...")
         self.show_status_message("Loading channels...")
         self.add_to_queue_button.setEnabled(False) # Disable while loading
-        channels_data = self.peertube_client.get_channels()
 
-        self.channel_combo.clear()
-        self.user_channels = []
+        api_channels_data = self.peertube_client.get_channels()
+        self.full_channel_list = [] # Reset full list
+        self.user_channels = [] # Reset user_channels (which will be used by task update signal)
 
-        if channels_data is not None:
-            if channels_data:
-                self.channel_combo.addItem("--- Select a Channel ---")
-                for channel in channels_data:
-                    self.user_channels.append({
-                        'id': channel['id'],
-                        'displayName': channel['displayName'],
-                        'name': channel['name'],
-                        'ownerAccountName': channel.get('ownerAccountName', 'N/A')
-                    })
+        if api_channels_data is not None:
+            self.full_channel_list = api_channels_data # Store the raw list
 
-                    display_text = f"{channel['displayName']} (Handle: {channel['name']})"
-                    owner_display = channel.get('ownerAccountName', 'N/A')
-                    is_own_channel = False
-                    if self.peertube_client and self.peertube_client.username:
-                        if owner_display == self.peertube_client.username or \
-                           owner_display.startswith(self.peertube_client.username + "@"):
-                           is_own_channel = True
+            # Sort the full_channel_list by 'displayName', case-insensitive
+            # We store this sorted list potentially in self.user_channels or use it directly for populating
+            # For now, let's sort full_channel_list itself, or a copy if preferred.
+            # The self.user_channels will be used by handle_task_update_signal, so it needs to be populated
+            # with the items that are actually *in the dropdown* at any given time.
+            # However, handle_task_update_signal iterates self.user_channels to find display names.
+            # This implies self.user_channels should be the *complete* list of channel data used for display name lookup.
 
-                    if (self.peertube_client and self.peertube_client.user_role_id in [0, 1]) and not is_own_channel and owner_display != 'N/A':
-                        display_text += f" (Owner: {owner_display})"
+            # Let's keep self.full_channel_list as the master, sorted list from API.
+            # And self.user_channels will be a copy of this, used by other parts of the code.
+            # The actual QComboBox population will be handled by _populate_channel_combo
+            # which will be called by search later.
 
-                    self.channel_combo.addItem(display_text, channel['id'])
-                self.channel_combo.setEnabled(True)
-                self.log_message(f"Loaded {len(channels_data)} channels.")
-                self.show_status_message(f"Loaded {len(channels_data)} channels.", 3000)
+            if self.full_channel_list:
+                # Sort the raw list fetched from API to be our definitive full_channel_list
+                self.full_channel_list.sort(key=lambda ch: ch['displayName'].lower())
+
+                # Populate self.user_channels which is used by handle_task_update_signal for display name lookups
+                # This should be a copy of the full list of channel details.
+                self.user_channels = list(self.full_channel_list)
+
+                self.log_message(f"Loaded and sorted {len(self.full_channel_list)} channels.")
+                self.show_status_message(f"Loaded {len(self.full_channel_list)} channels.", 3000)
+                # Initial population of the combo box without any search term
+                self._populate_channel_combo(self.full_channel_list)
             else:
                 self.log_message("No channels found for your account or instance.")
-                self.channel_combo.addItem("No channels found")
-                self.channel_combo.setEnabled(False)
+                self._populate_channel_combo([]) # Populate with empty to show "No channels"
                 self.show_status_message("No channels found.", 3000)
-                self.add_to_queue_button.setEnabled(False)
-        else: # channels_data is None (error during fetch)
+        else: # api_channels_data is None (error during fetch)
             self.log_message("Failed to load channels. See logs.")
-            self.channel_combo.addItem("Failed to load channels")
-            self.channel_combo.setEnabled(False)
-            self.add_to_queue_button.setEnabled(False)
+            self._populate_channel_combo(None) # Populate with None to show "Failed to load"
             QMessageBox.critical(self, "Error", "Failed to load channels from the PeerTube instance.")
             self.show_status_message("Failed to load channels.", 3000)
 
         # Call this to set initial state of add_to_queue_button based on current selection
+        # This will be handled by _populate_channel_combo or _on_channel_selection_change
+        # self._on_channel_selection_change(self.channel_combo.currentIndex())
+        # If _populate_channel_combo enables/disables combo and calls _on_channel_selection_change, this is fine.
+
+    def _on_channel_search_changed(self, search_text):
+        """
+        Filters the channel list in the QComboBox based on the search_text.
+        """
+        if not hasattr(self, 'full_channel_list') or not self.full_channel_list:
+            # No channels loaded yet, or list is empty
+            self._populate_channel_combo(self.full_channel_list) # Show appropriate message like "No channels" or "Failed to load"
+            return
+
+        search_text_lower = search_text.lower().strip()
+
+        if not search_text_lower:
+            # Search is empty, show all (sorted) channels
+            self._populate_channel_combo(self.full_channel_list)
+            return
+
+        filtered_channels = [
+            ch for ch in self.full_channel_list
+            if search_text_lower in ch['displayName'].lower() or \
+               search_text_lower in ch['name'].lower()
+        ]
+
+        # The full_channel_list is already sorted. Filtering preserves relative order.
+        # If a different sort order was needed for filtered results, it would be applied here.
+        self._populate_channel_combo(filtered_channels)
+
+
+    def _populate_channel_combo(self, channels_to_display):
+        """
+        Helper function to populate the channel_combo QComboBox.
+        channels_to_display: A list of channel dictionaries to display.
+                             If None, indicates a failure to load.
+                             If empty list, indicates no channels found.
+        """
+        self.channel_combo.clear()
+        self.add_to_queue_button.setEnabled(False) # Disable by default
+
+        if channels_to_display is None: # Error case
+            self.channel_combo.addItem("Failed to load channels")
+            self.channel_combo.setEnabled(False)
+        elif not channels_to_display: # No channels found
+            self.channel_combo.addItem("No channels found")
+            self.channel_combo.setEnabled(False)
+        else: # Channels available
+            self.channel_combo.addItem("--- Select a Channel ---")
+            for channel in channels_to_display:
+                display_text = f"{channel['displayName']} (Handle: {channel['name']})"
+                owner_display = channel.get('ownerAccountName', 'N/A')
+                is_own_channel = False
+                if self.peertube_client and self.peertube_client.username:
+                    if owner_display == self.peertube_client.username or \
+                       owner_display.startswith(self.peertube_client.username + "@"):
+                       is_own_channel = True
+
+                if (self.peertube_client and self.peertube_client.user_role_id in [0, 1]) and not is_own_channel and owner_display != 'N/A':
+                    display_text += f" (Owner: {owner_display})"
+                self.channel_combo.addItem(display_text, channel['id'])
+            self.channel_combo.setEnabled(True)
+
+        # Ensure the "Add to Queue" button state is updated based on the current selection (or lack thereof)
         self._on_channel_selection_change(self.channel_combo.currentIndex())
 
 
