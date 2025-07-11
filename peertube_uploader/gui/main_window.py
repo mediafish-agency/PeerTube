@@ -906,37 +906,55 @@ class MainWindow(QMainWindow):
 
         self.settings.setValue("gui/middle_h_splitter_state", self.middle_h_splitter.saveState())
         self.settings.setValue("gui/middle_h_splitter_state", self.middle_h_splitter.saveState())
-        self.log_message("DEBUG: Splitter states prepared for saving.")
+        self.log_message("Main window closing...")
 
-        # self.log_message("DEBUG: Calling _save_upload_history from closeEvent...")
-        # self._save_upload_history() # Save history on close
-        # Relying on saves from _add_to_upload_history. If history could be altered elsewhere without saving,
-        # this might need to be re-instated or that alteration point needs to save.
-        self.log_message("DEBUG: History is saved when items are added.")
-
+        # Step 1: Stop Queue Manager and Wait for its thread
         if self.queue_manager:
-            self.log_message("Stopping queue manager...")
-            self.queue_manager.stop_processing() # This might take a moment
+            self.log_message("DEBUG: Stopping queue manager in closeEvent...")
+            self.queue_manager.stop_processing() # Signals thread to stop
+            if self.queue_manager.processing_thread and self.queue_manager.processing_thread.is_alive():
+                self.log_message("DEBUG: Waiting for queue manager processing thread to join...")
+                # Use a loop with processEvents to keep UI responsive if join takes time,
+                # though join itself is blocking. Short timeout for this example.
+                # For a truly responsive GUI during a long join, this part would be more complex.
+                self.queue_manager.processing_thread.join(timeout=5.0) # Wait for up to 5s
+                if self.queue_manager.processing_thread.is_alive():
+                    self.log_message("WARNING: Queue manager thread did not join in time.")
+                else:
+                    self.log_message("DEBUG: Queue manager thread joined successfully.")
+            else:
+                self.log_message("DEBUG: Queue manager thread was not alive or not present at join attempt.")
 
-        self.log_message("DEBUG: Before super().closeEvent() in closeEvent.")
-        super().closeEvent(event)
-        self.log_message("DEBUG: After super().closeEvent() in closeEvent.")
+        # Step 2: Process Pending Qt Events
+        # This ensures any signals emitted during queue manager shutdown (like task updates) are processed
+        self.log_message("DEBUG: Processing pending Qt events in closeEvent (1st pass)...")
+        QApplication.processEvents()
+        # It's sometimes useful to call it more than once, or with a small delay if events queue other events.
+        # For simplicity, one strong call after thread join. If issues persist, can revisit this.
+        # self.log_message("DEBUG: Processing pending Qt events in closeEvent (2nd pass)...")
+        # QApplication.processEvents()
 
-        # Explicit final sync for QSettings AFTER Qt's close processing.
+
+        # Step 3: Save All Settings (Including Final History State)
         if hasattr(self, 'settings') and self.settings is not None:
-            self.log_message("DEBUG: Performing final QSettings.sync() at the end of closeEvent.")
-            self.settings.sync()
-            status = self.settings.status()
-            self.log_message(f"DEBUG: Final QSettings sync status: {status}")
-            if status != QSettings.NoError:
-                self.log_message(f"ERROR: Final QSettings sync in closeEvent reported an error: {status}")
+            self.log_message("DEBUG: Saving splitter states in closeEvent.")
+            self.settings.setValue("gui/main_v_splitter_state", self.main_v_splitter.saveState())
+            self.settings.setValue("gui/middle_h_splitter_state", self.middle_h_splitter.saveState())
 
-            # Attempt to ensure QSettings destructor runs and flushes
-            self.log_message("DEBUG: Deleting self.settings in closeEvent.")
-            del self.settings
-            self.settings = None # Ensure it's not accidentally accessed later if app doesn't fully exit
+            self.log_message("DEBUG: Performing final save of upload history in closeEvent.")
+            self._save_upload_history() # This calls self.settings.sync() internally
+        else:
+            self.log_message("WARNING: self.settings object not found or is None during closeEvent save attempt.")
 
-        self.log_message("Application closed.")
+        # Step 4: Accept Close Event (allow Qt to close down)
+        self.log_message("DEBUG: Accepting close event (super().closeEvent()).")
+        super().closeEvent(event)
+
+        # Step 5: No explicit deletion of self.settings. Let Python/Qt handle it.
+        # The QSettings destructor should sync/flush if not done explicitly.
+        # Explicit syncs were done in _save_upload_history.
+
+        self.log_message("Application closed (after super().closeEvent()).")
 
     def _load_upload_history(self):
         self.log_message("DEBUG: Attempting to load upload history...")
