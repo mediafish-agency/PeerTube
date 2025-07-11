@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QInputDialog, QMessageBox, QStatusBar, QProgressBar,
                              QSplitter, QFrame, QAbstractItemView, QTreeView, QListView, # Added QTreeView, QListView
                              QFileSystemModel, QStyle) # Added QFileSystemModel, QStyle
+import datetime # For timestamping history
 from PyQt5.QtGui import QIcon # Import QIcon
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QDir, QSettings # Import QThread, QDir, QSettings
 from api.peertube_client import PeerTubeClient
@@ -32,6 +33,9 @@ class MainWindow(QMainWindow):
         # Initialize QSettings
         # Using generic names; replace "YourOrg" and "PeerTubeUploader" as appropriate
         self.settings = QSettings("PeerTubeUploaderOrg", "PeerTubeUploaderApp")
+
+        self.upload_history = []
+        self._load_upload_history()
 
         self.setGeometry(100, 100, 900, 750) # Initial size, user can resize with splitters
 
@@ -712,20 +716,32 @@ class MainWindow(QMainWindow):
                 'item': item,
                 'label': QLabel(base_text),
                 'progress_bar': QProgressBar(),
-                'status_label': QLabel(f" {status_enum.value}")
+                'status_label': QLabel(f" {status_enum.value}"),
+                'copy_url_button': QPushButton() # Create button, configure later
             }
 
+            copy_btn = self.task_widgets[task_id]['copy_url_button']
+            copy_icon = self.style().standardIcon(QStyle.SP_FileDialogContentsView) # Generic icon, find better if possible
+            copy_btn.setIcon(copy_icon)
+            copy_btn.setToolTip("Copy Video URL to Clipboard")
+            copy_btn.setFixedSize(24, 24) # Small icon button
+            copy_btn.setVisible(False) # Hidden by default
+            copy_btn.clicked.connect(self._copy_video_url_to_clipboard)
+
+
             self.task_widgets[task_id]['label'].setWordWrap(True)
-            item_layout.addWidget(self.task_widgets[task_id]['label'], 1)
+            item_layout.addWidget(self.task_widgets[task_id]['label'], 1) # Label takes most space
 
             self.task_widgets[task_id]['progress_bar'].setRange(0, 100)
             self.task_widgets[task_id]['progress_bar'].setValue(0)
             self.task_widgets[task_id]['progress_bar'].setTextVisible(True)
-            self.task_widgets[task_id]['progress_bar'].setFixedSize(120, 18)
+            self.task_widgets[task_id]['progress_bar'].setFixedSize(120, 18) # Progress bar size
             item_layout.addWidget(self.task_widgets[task_id]['progress_bar'])
 
-            self.task_widgets[task_id]['status_label'].setFixedWidth(80)
+            self.task_widgets[task_id]['status_label'].setFixedWidth(80) # Status label size
             item_layout.addWidget(self.task_widgets[task_id]['status_label'])
+
+            item_layout.addWidget(copy_btn) # Add copy button to layout
 
             item_widget.setLayout(item_layout)
             item.setSizeHint(item_widget.sizeHint())
@@ -736,27 +752,80 @@ class MainWindow(QMainWindow):
             task_gui_parts = self.task_widgets[task_id]
             task_gui_parts['status_label'].setText(f" {status_enum.value}")
             task_gui_parts['progress_bar'].setValue(progress if progress is not None else 0)
+            copy_button = task_gui_parts['copy_url_button'] # Get the button
 
             current_label_text = task_gui_parts['label'].text()
             video_id_text_segment = f" (Video ID: {video_id})"
 
+            is_terminal_state = False
+            video_url = None
+
             if status_enum == TaskStatus.FAILED:
                 task_gui_parts['label'].setStyleSheet("color: red;")
                 task_gui_parts['status_label'].setStyleSheet("color: red;")
+                copy_button.setVisible(False)
                 self.log_message(f"Task {task_id} ('{title}') FAILED: {error_message}")
+                is_terminal_state = True
             elif status_enum == TaskStatus.COMPLETED:
                 task_gui_parts['label'].setStyleSheet("color: green;")
                 task_gui_parts['status_label'].setStyleSheet("color: green;")
-                if video_id and video_id_text_segment not in current_label_text:
-                    task_gui_parts['label'].setText(current_label_text + video_id_text_segment)
+                if video_id:
+                    if video_id_text_segment not in current_label_text:
+                        task_gui_parts['label'].setText(current_label_text + video_id_text_segment)
+                    video_url = self._get_video_url(video_id)
+                    if video_url:
+                        copy_button.setProperty("video_url", video_url)
+                        copy_button.setVisible(True)
+                    else:
+                        copy_button.setVisible(False)
+                else:
+                    copy_button.setVisible(False)
+                is_terminal_state = True
             elif status_enum == TaskStatus.CANCELLED:
                 task_gui_parts['label'].setStyleSheet("color: orange;")
                 task_gui_parts['status_label'].setStyleSheet("color: orange;")
-            else:
+                copy_button.setVisible(False)
+                is_terminal_state = True
+            else: # Not a terminal state
                 task_gui_parts['label'].setStyleSheet("")
                 task_gui_parts['status_label'].setStyleSheet("")
+                copy_button.setVisible(False) # Hide for non-terminal states
                 if video_id_text_segment in current_label_text:
                      task_gui_parts['label'].setText(current_label_text.replace(video_id_text_segment, ""))
+
+            if is_terminal_state:
+                # Attempt to find channel name for history
+                # video_url is already set if COMPLETED and video_id exists
+                channel_name_for_history = "Unknown Channel"
+                if hasattr(self, 'user_channels'): # Ensure user_channels is available
+                    for ch_data in self.user_channels:
+                        if ch_data['id'] == channel_id_from_cb: # channel_id_from_cb is task.channel_id
+                            channel_name_for_history = ch_data['displayName']
+                            break
+
+                # Placeholder for video_url, will be properly filled in next step
+                # For now, it's passed to _add_to_upload_history and might be None for FAILED/CANCELLED
+                # or if video_id is not yet available for COMPLETED (though it should be).
+                # The _get_video_url method will be used in the next step.
+                current_ts = datetime.datetime.now().isoformat()
+
+                # video_url_for_history will be properly generated in the next step
+                # For now, we'll call _get_video_url if status is COMPLETED and video_id exists.
+                # This anticipates the next step.
+                # video_url is already derived above if task is COMPLETED.
+                # if status_enum == TaskStatus.COMPLETED and video_id:
+                #     video_url = self._get_video_url(video_id) # video_url is already set
+
+                self._add_to_upload_history(
+                    title=title,
+                    file_path=file_path,
+                    video_id=video_id,
+                    video_url=video_url, # Use the derived video_url
+                    timestamp=current_ts,
+                    status=status_enum,
+                    channel_id=channel_id_from_cb,
+                    channel_name_hint=channel_name_for_history
+                )
 
         self._update_queue_control_button_states()
 
@@ -828,11 +897,71 @@ class MainWindow(QMainWindow):
 
         self.log_message("Splitter states saved.")
 
+        self._save_upload_history() # Save history on close
+        self.log_message("Upload history saved.")
+
         if self.queue_manager:
             self.log_message("Stopping queue manager...")
             self.queue_manager.stop_processing()
         super().closeEvent(event)
         self.log_message("Application closed.")
+
+    def _load_upload_history(self):
+        history = self.settings.value("history/uploads", [])
+        if isinstance(history, list): # Basic check
+            self.upload_history = history
+            self.log_message(f"Loaded {len(self.upload_history)} items from upload history.")
+        else:
+            self.log_message("Could not load upload history or history is malformed.")
+            self.upload_history = [] # Ensure it's a list
+
+    def _save_upload_history(self):
+        self.settings.setValue("history/uploads", self.upload_history)
+        # self.log_message("Upload history saved to settings.") # Logged by caller or closeEvent
+
+    def _get_video_url(self, video_id):
+        if not self.configured_instance_url or not video_id:
+            return None
+        # Common PeerTube URL structure for short links. Adjust if instance uses a different pattern.
+        return f"{self.configured_instance_url.rstrip('/')}/w/{video_id}"
+
+    def _copy_video_url_to_clipboard(self):
+        sender_button = self.sender()
+        if sender_button and isinstance(sender_button, QPushButton):
+            video_url = sender_button.property("video_url")
+            if video_url:
+                QApplication.clipboard().setText(video_url)
+                self.show_status_message("Video URL copied to clipboard!", 3000)
+                self.log_message(f"Copied URL to clipboard: {video_url}")
+            else:
+                self.log_message("Copy URL button clicked, but no URL found in property.")
+        else:
+            self.log_message("Copy URL action triggered by unexpected sender.")
+
+
+    def _add_to_upload_history(self, title, file_path, video_id, video_url, timestamp, status, channel_id, channel_name_hint):
+        # Create history entry
+        entry = {
+            "title": title,
+            "file_path": file_path,
+            "video_id": video_id,
+            "video_url": video_url,
+            "timestamp": timestamp, # Should be ISO format string or similar
+            "status": status.value if hasattr(status, 'value') else str(status), # Store enum value
+            "channel_id": channel_id,
+            "channel_name_hint": channel_name_hint # Store a hint, actual name might change
+        }
+
+        self.upload_history.insert(0, entry) # Add to the beginning (most recent first)
+
+        # Keep history limited to 30 items
+        max_history_items = 30
+        if len(self.upload_history) > max_history_items:
+            self.upload_history = self.upload_history[:max_history_items]
+
+        self._save_upload_history() # Persist after each addition
+        self.log_message(f"Added to upload history: '{title}'. History size: {len(self.upload_history)}.")
+
 
     def _update_queue_control_button_states(self):
         """Updates the enabled state and text of queue control buttons."""
