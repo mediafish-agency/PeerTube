@@ -212,14 +212,31 @@ class MainWindow(QMainWindow):
         title_layout.addWidget(self.title_input)
         controls_layout.addLayout(title_layout)
 
+        # Privacy Dropdown
+        privacy_layout = QHBoxLayout()
+        privacy_layout.addWidget(QLabel("Privacy:"))
+        self.privacy_combo = QComboBox()
+        self.privacy_combo.addItem("Public", 1)
+        self.privacy_combo.addItem("Unlisted", 2)
+        self.privacy_combo.addItem("Private", 3)
+        # self.privacy_combo.addItem("Internal", 4) # Optional
+
+        # Set "Unlisted" (data value 2) as default
+        unlisted_index = self.privacy_combo.findData(2)
+        if unlisted_index != -1:
+            self.privacy_combo.setCurrentIndex(unlisted_index)
+
+        privacy_layout.addWidget(self.privacy_combo)
+        controls_layout.addLayout(privacy_layout)
+
         # Add to Queue Button
-        self.add_to_queue_button = QPushButton() # Text removed for icon, or can be " Add"
-        add_icon = self.style().standardIcon(QStyle.SP_ArrowUp) # Using SP_ArrowUp for "upload"
+        self.add_to_queue_button = QPushButton()
+        add_icon = self.style().standardIcon(QStyle.SP_ArrowUp)
         self.add_to_queue_button.setIcon(add_icon)
-        self.add_to_queue_button.setText("Add to Queue") # Keep text for clarity, icon is a visual aid
+        self.add_to_queue_button.setText("Add to Queue")
         self.add_to_queue_button.setToolTip("Add selected video to the upload queue")
         self.add_to_queue_button.clicked.connect(self.add_to_queue)
-        self.add_to_queue_button.setEnabled(False) # Initial state
+        self.add_to_queue_button.setEnabled(False)
         controls_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
 
         layout.addWidget(controls_container) # Add controls container to main layout
@@ -677,12 +694,16 @@ class MainWindow(QMainWindow):
             self.log_message("Error: Video title must be between 3 and 120 characters.")
             return
 
+        privacy_value = self.privacy_combo.currentData()
+        self.log_message(f"DEBUG: Selected privacy for new task: {privacy_value} ({self.privacy_combo.currentText()})")
+
         task_id = self.queue_manager.add_task(
             file_path=file_path,
             channel_id=channel_id,
-            title=title
+            title=title,
+            privacy=privacy_value # Pass the selected privacy
         )
-        self.log_message(f"Task '{title}' (ID: {task_id}) added to internal queue.")
+        self.log_message(f"Task '{title}' (ID: {task_id}) added to internal queue with privacy {privacy_value}.")
         self.show_status_message(f"Added '{title}' to queue.", 2000)
 
         self.file_path_input.clear()

@@ -15,13 +15,14 @@ class TaskStatus(Enum):
     INITIALIZING = "Initializing" # For resumable upload init phase
 
 class VideoUploadTask:
-    def __init__(self, task_id, file_path, channel_id, title, description="", privacy=1, nsfw=False, tags=None):
+    # Default privacy to 2 (Unlisted) to match UI default.
+    def __init__(self, task_id, file_path, channel_id, title, description="", privacy=2, nsfw=False, tags=None):
         self.task_id = task_id
         self.file_path = file_path
         self.channel_id = channel_id
         self.title = title
         self.description = description
-        self.privacy = privacy
+        self.privacy = privacy # Store the passed privacy value
         self.nsfw = nsfw
         self.tags = tags if tags else []
 
@@ -84,13 +85,14 @@ class UploadQueueManager:
                 False   # is_removed
             )
 
-
-    def add_task(self, file_path, channel_id, title, description="", privacy=1, nsfw=False, tags=None):
+    # Update signature to include privacy, default to 2 (Unlisted)
+    def add_task(self, file_path, channel_id, title, description="", privacy=2, nsfw=False, tags=None):
         with self.queue_lock:
             self.task_id_counter += 1
+            # Pass the received privacy to VideoUploadTask constructor
             task = VideoUploadTask(self.task_id_counter, file_path, channel_id, title, description, privacy, nsfw, tags)
             self.queue.append(task)
-            self._log(f"Added task: {title} (ID: {task.task_id}) to queue. File: {file_path}")
+            self._log(f"Added task: {title} (ID: {task.task_id}, Privacy: {privacy}) to queue. File: {file_path}")
             if self.status_update_callback: # Notify GUI about new task in queue
                  self.status_update_callback(task.task_id, task.status, task.progress, None, None, is_new=True, file_path=task.file_path, title=task.title, channel_id=task.channel_id, is_removed=False)
 
@@ -336,10 +338,10 @@ class UploadQueueManager:
             channel_id=task.channel_id,
             file_path=task.file_path,
             video_name=task.title,
-            video_description=task.description,
-            privacy=task.privacy,
-            nsfw=task.nsfw,
-            tags=task.tags
+            video_description=task.description, # Already defaults to "" in VideoUploadTask
+            privacy=task.privacy,               # This is the key line, ensuring task.privacy is passed
+            nsfw=task.nsfw,                     # Already defaults to False in VideoUploadTask
+            tags=task.tags                      # Already defaults to [] in VideoUploadTask
         )
 
         if not init_response or not init_response.get("upload_id"):
