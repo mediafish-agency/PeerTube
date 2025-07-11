@@ -47,6 +47,8 @@ class MainWindow(QMainWindow):
         self.log_message(f"DEBUG: After _load_upload_history, self.upload_history is: {self.upload_history}")
 
         self.setGeometry(100, 100, 900, 750) # Initial size, user can resize with splitters
+        self.setAcceptDrops(True) # Enable Drag and Drop for the main window
+        self.video_extensions = [".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".wmv"] # Define accepted extensions
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -955,6 +957,72 @@ class MainWindow(QMainWindow):
         # Explicit syncs were done in _save_upload_history.
 
         self.log_message("Application closed (after super().closeEvent()).")
+
+    def dragEnterEvent(self, event):
+        self.log_message("DEBUG: dragEnterEvent triggered.")
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls: # Should always be true if hasUrls() is true
+                file_path = urls[0].toLocalFile()
+                # Check if it's a single file and if the extension is in our list
+                if len(urls) == 1 and os.path.isfile(file_path):
+                    _, ext = os.path.splitext(file_path)
+                    if ext.lower() in self.video_extensions:
+                        self.log_message(f"DEBUG: Dragged file '{file_path}' accepted.")
+                        event.acceptProposedAction()
+                        return
+                    else:
+                        self.log_message(f"DEBUG: Dragged file '{file_path}' rejected (invalid extension: {ext}).")
+                else:
+                    self.log_message(f"DEBUG: Drag rejected (not a single file or not a file path). Files: {[url.toLocalFile() for url in urls]}")
+            else: # Should not happen if hasUrls is true
+                self.log_message("DEBUG: Drag event has URLs but URL list is empty.")
+        else:
+            self.log_message("DEBUG: Drag event does not contain URLs.")
+        event.ignore()
+
+    def dropEvent(self, event):
+        self.log_message("DEBUG: dropEvent triggered.")
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls: # Should be true if dragEnterEvent accepted
+                file_url = urls[0] # Process only the first file
+                if file_url.isLocalFile():
+                    file_path = file_url.toLocalFile()
+                    if os.path.isfile(file_path):
+                        _, ext = os.path.splitext(file_path)
+                        if ext.lower() in self.video_extensions:
+                            self.log_message(f"DEBUG: File dropped: {file_path}")
+
+                            self.file_path_input.setText(file_path)
+
+                            base_name = os.path.basename(file_path)
+                            title_without_extension, _ = os.path.splitext(base_name)
+                            self.title_input.setText(title_without_extension)
+
+                            directory_path = os.path.dirname(file_path)
+                            if hasattr(self, 'settings') and self.settings is not None: # Ensure settings object exists
+                                self.settings.setValue("gui/lastLocalPath", directory_path)
+                                self.log_message(f"DEBUG: Saved last local path from drop: {directory_path}")
+                            else:
+                                self.log_message("WARNING: Settings object not available, cannot save lastLocalPath from drop.")
+
+                            self._update_add_to_queue_button_state()
+                            self.show_status_message(f"File loaded by drop: {base_name}", 3000)
+                            event.acceptProposedAction()
+                            return
+                        else:
+                            self.log_message(f"DEBUG: Dropped file '{file_path}' rejected (invalid extension: {ext}).")
+                    else:
+                        self.log_message(f"DEBUG: Dropped path '{file_path}' is not a file.")
+                else:
+                    self.log_message(f"DEBUG: Dropped URL '{file_url.toString()}' is not a local file.")
+            else: # Should not happen
+                 self.log_message("DEBUG: Drop event has URLs but URL list is empty.")
+        else:
+            self.log_message("DEBUG: Drop event does not contain URLs.")
+        event.ignore()
+
 
     def _load_upload_history(self):
         self.log_message("DEBUG: Attempting to load upload history...")
