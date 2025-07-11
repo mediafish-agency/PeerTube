@@ -5,9 +5,11 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QComboBox, QGroupBox, QTextEdit, QListWidget, QListWidgetItem,
                              QInputDialog, QMessageBox, QStatusBar, QProgressBar,
                              QSplitter, QFrame, QAbstractItemView, QTreeView, QListView, # Added QTreeView, QListView
-                             QFileSystemModel, QStyle) # Added QFileSystemModel, QStyle
+                             QFileSystemModel, QStyle, QCheckBox) # Added QFileSystemModel, QStyle, QCheckBox
 import datetime # For timestamping history
 import json # For serializing history data
+import platform # For OS detection for shutdown
+import subprocess # For executing shutdown commands
 from PyQt5.QtGui import QIcon # Import QIcon
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QDir, QSettings # Import QThread, QDir, QSettings
 from api.peertube_client import PeerTubeClient
@@ -45,6 +47,9 @@ class MainWindow(QMainWindow):
         self.log_message("DEBUG: Initializing upload_history as []. Calling _load_upload_history...")
         self._load_upload_history() # Loads from "history/uploads_json"
         self.log_message(f"DEBUG: After _load_upload_history, self.upload_history is: {self.upload_history}")
+
+        self.auto_shutdown_requested = False
+        self.is_shutdown_scheduled = False # Tracks if a timed shutdown command has been issued
 
         self.setGeometry(100, 100, 900, 750) # Initial size, user can resize with splitters
         self.setAcceptDrops(True) # Enable Drag and Drop for the main window
@@ -388,6 +393,13 @@ class MainWindow(QMainWindow):
         queue_control_buttons_layout.addWidget(self.stop_all_clear_button)
         queue_main_layout.addLayout(queue_control_buttons_layout)
 
+        # Add Shutdown Checkbox
+        self.shutdown_checkbox = QCheckBox("Shutdown PC after queue completion")
+        self.shutdown_checkbox.setChecked(False)
+        self.shutdown_checkbox.stateChanged.connect(self._handle_shutdown_checkbox_changed)
+        queue_main_layout.addWidget(self.shutdown_checkbox, alignment=Qt.AlignLeft)
+
+
         queue_section_group.setLayout(queue_main_layout)
         return queue_section_group
 
@@ -496,6 +508,7 @@ class MainWindow(QMainWindow):
                     upload_chunk_size_mb=4
                 )
                 self.log_message("UploadQueueManager initialized with 4MB chunk size.")
+                self.queue_manager.all_tasks_processed_signal.connect(self._handle_all_tasks_processed) # Connect new signal
             self.load_channels()
         else:
             self.log_message("Authentication failed. Check credentials in settings.py or server status.")
@@ -978,6 +991,145 @@ class MainWindow(QMainWindow):
         # Explicit syncs were done in _save_upload_history.
 
         self.log_message("Application closed (after super().closeEvent()).")
+
+    def _handle_shutdown_checkbox_changed(self, state):
+        if state == Qt.Checked:
+            self.auto_shutdown_requested = True
+            self.log_message("DEBUG: Auto-shutdown after queue completion: ENABLED by user.")
+            # Actual shutdown is triggered by _handle_all_tasks_processed
+        else:
+            self.auto_shutdown_requested = False
+            self.log_message("DEBUG: Auto-shutdown after queue completion: DISABLED by user.")
+            if self.is_shutdown_scheduled: # If a timed shutdown was already command-line scheduled
+                self.log_message("DEBUG: Auto-shutdown disabled, attempting to cancel previously scheduled system shutdown.")
+                self._cancel_scheduled_shutdown() # This method will be implemented next
+            else:
+                self.log_message("DEBUG: Auto-shutdown disabled, no system shutdown was actively scheduled.")
+
+    def _handle_all_tasks_processed(self):
+        self.log_message("DEBUG: _handle_all_tasks_processed signal received.")
+        if not self.auto_shutdown_requested:
+            self.log_message("DEBUG: Auto-shutdown not requested by user, so not proceeding with shutdown.")
+            return
+
+        # Check if there are any tasks that are not completed (e.g. failed, cancelled)
+        # This is a safety check, as the signal ideally means all *pending* work is done.
+        # The user might only want to shutdown if *everything* was successful.
+        # For now, let's assume "all tasks processed" means the queue is no longer actively working on anything.
+
+        # More complex dialog with countdown would go here.
+        # For this step, we'll just log and call _execute_shutdown with a delay.
+        self.log_message("DEBUG: All tasks processed and auto-shutdown is enabled.")
+
+        # Simplified: Directly schedule shutdown with a delay.
+        # A real implementation should use a QMessageBox with a timer for user to cancel.
+        QMessageBox.information(self, "Queue Complete",
+                                "All uploads in the queue have been processed.\n"
+                                "If auto-shutdown is enabled, it will proceed shortly.\n"
+                                "(Placeholder for timed shutdown with cancel option)")
+
+        self.log_message("INFO: Auto-shutdown initiated (simulated delay for now, will call _execute_shutdown).")
+        # In a real scenario with a countdown dialog, _execute_shutdown would be called by the dialog.
+        # For now, let's assume a 60-second delay before shutdown.
+        self._execute_shutdown(immediate=False, delay_seconds=60)
+
+
+    def _execute_shutdown(self, immediate=True, delay_seconds=60):
+        self.log_message(f"DEBUG: Attempting to execute shutdown (immediate: {immediate}, delay: {delay_seconds}s)...")
+        os_type = platform.system().lower()
+        shutdown_cmd = []
+
+        if os_type == "windows":
+            shutdown_cmd = ["shutdown"]
+            if immediate:
+                shutdown_cmd.extend(["/s", "/f", "/t", "0"])
+            else:
+                shutdown_cmd.extend(["/s", "/f", "/t", str(delay_seconds)])
+                self.is_shutdown_scheduled = True
+        elif os_type == "linux":
+            # For Linux, 'sudo' is often required. This assumes passwordless sudo for 'shutdown'
+            # or the application is run as root.
+            shutdown_cmd = ["sudo", "shutdown"]
+            if immediate:
+                shutdown_cmd.append("now")
+            else:
+                # shutdown command usually takes minutes for delay
+                minutes_delay = max(1, (delay_seconds + 59) // 60) # Round up to nearest minute, min 1
+                shutdown_cmd.append(f"+{minutes_delay}")
+                self.is_shutdown_scheduled = True
+        else:
+            self.log_message(f"WARNING: Auto-shutdown not supported on this OS: {os_type}")
+            QMessageBox.warning(self, "Unsupported OS", f"Automatic shutdown is not supported on {os_type}.")
+            return
+
+        if shutdown_cmd:
+            self.log_message(f"DEBUG: Executing shutdown command: {' '.join(shutdown_cmd)}")
+            try:
+                subprocess.Popen(shutdown_cmd) # Use Popen for non-blocking execution
+                if not immediate:
+                    self.log_message(f"INFO: System shutdown scheduled in approx. {delay_seconds} seconds.")
+                    QMessageBox.information(self, "Shutdown Scheduled",
+                                            f"System shutdown has been scheduled in approximately {delay_seconds} seconds.\n"
+                                            "Uncheck the 'Shutdown PC' box to cancel.")
+                else:
+                    self.log_message("INFO: System shutdown initiated immediately.")
+                    # No QMessageBox here as system will shut down.
+            except FileNotFoundError:
+                self.log_message(f"ERROR: Shutdown command not found ('{shutdown_cmd[0]}'). Please ensure it's in your system PATH.")
+                QMessageBox.critical(self, "Shutdown Error", f"Shutdown command '{shutdown_cmd[0]}' not found.")
+                self.is_shutdown_scheduled = False # Failed to schedule
+            except PermissionError: # This might not be caught directly by Popen for external commands
+                self.log_message("ERROR: Permission denied for shutdown command. Run as administrator/root or configure sudo.")
+                QMessageBox.critical(self, "Shutdown Error", "Permission denied for shutdown. Please run with higher privileges.")
+                self.is_shutdown_scheduled = False
+            except Exception as e:
+                self.log_message(f"ERROR: Failed to execute shutdown command: {e}")
+                QMessageBox.critical(self, "Shutdown Error", f"Failed to execute shutdown command: {e}")
+                self.is_shutdown_scheduled = False
+
+    def _cancel_scheduled_shutdown(self):
+        self.log_message("DEBUG: Attempting to cancel scheduled shutdown...")
+        if not self.is_shutdown_scheduled:
+            self.log_message("DEBUG: No shutdown currently scheduled or it was immediate.")
+            return
+
+        os_type = platform.system().lower()
+        cancel_cmd = []
+
+        if os_type == "windows":
+            cancel_cmd = ["shutdown", "/a"]
+        elif os_type == "linux":
+            cancel_cmd = ["sudo", "shutdown", "-c"]
+        else:
+            self.log_message(f"WARNING: Shutdown cancellation not supported on this OS: {os_type}")
+            return # No standard cancel command for unknown OS
+
+        if cancel_cmd:
+            self.log_message(f"DEBUG: Executing shutdown cancellation command: {' '.join(cancel_cmd)}")
+            try:
+                result = subprocess.run(cancel_cmd, check=False, capture_output=True, text=True)
+                if result.returncode == 0:
+                    self.log_message("INFO: Scheduled shutdown successfully cancelled.")
+                    QMessageBox.information(self, "Shutdown Cancelled", "The scheduled system shutdown has been cancelled.")
+                    self.is_shutdown_scheduled = False
+                else:
+                    # Some systems might return non-zero if no shutdown was scheduled,
+                    # or if 'sudo shutdown -c' fails due to no active shutdown.
+                    self.log_message(f"WARNING: Shutdown cancellation command executed. Exit code: {result.returncode}. Stderr: {result.stderr.strip()}. Stdout: {result.stdout.strip()}")
+                    # We'll assume it worked or there was nothing to cancel.
+                    # A more robust check might be needed depending on OS specifics.
+                    QMessageBox.warning(self, "Shutdown Cancellation", f"Attempted to cancel shutdown. Command output (if any) logged.\nIf it failed, there might not have been a pending shutdown or there was an issue.")
+                    self.is_shutdown_scheduled = False # Reset state regardless of specific outcome here
+            except FileNotFoundError:
+                self.log_message(f"ERROR: Shutdown cancellation command not found ('{cancel_cmd[0]}').")
+                QMessageBox.critical(self, "Cancellation Error", f"Shutdown cancellation command '{cancel_cmd[0]}' not found.")
+            except Exception as e:
+                self.log_message(f"ERROR: Failed to execute shutdown cancellation command: {e}")
+                QMessageBox.critical(self, "Cancellation Error", f"Failed to cancel shutdown: {e}")
+
+        # Ensure state is updated even if command fails locally but might have worked
+        self.is_shutdown_scheduled = False
+
 
     def dragEnterEvent(self, event):
         self.log_message("DEBUG: dragEnterEvent triggered.")

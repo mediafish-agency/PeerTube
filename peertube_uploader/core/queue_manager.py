@@ -2,6 +2,7 @@ import time
 import threading
 from enum import Enum
 import os
+from PyQt5.QtCore import pyqtSignal, QObject # Added pyqtSignal, QObject for the new signal
 
 from api.peertube_client import PeerTubeClient
 
@@ -35,8 +36,11 @@ class VideoUploadTask:
         self.bytes_uploaded = 0
 
 
-class UploadQueueManager:
+class UploadQueueManager(QObject): # Inherit from QObject to use signals
+    all_tasks_processed_signal = pyqtSignal() # Define the new signal
+
     def __init__(self, peertube_client: PeerTubeClient, status_update_callback=None, log_callback=None, upload_chunk_size_mb=4):
+        super().__init__() # Call QObject constructor
         self.queue = []
         self.peertube_client = peertube_client
         self.current_task = None
@@ -48,6 +52,7 @@ class UploadQueueManager:
         self.processing_thread = None
         self.upload_chunk_size_mb = upload_chunk_size_mb # Use passed argument, default to 4MB
         self.chunk_size_bytes = self.upload_chunk_size_mb * 1024 * 1024
+        self.idle_signal_emitted_this_cycle = False # To ensure signal is emitted only once per idle period
 
 
         # Callbacks to update GUI or log messages
@@ -96,6 +101,8 @@ class UploadQueueManager:
             if self.status_update_callback: # Notify GUI about new task in queue
                  self.status_update_callback(task.task_id, task.status, task.progress, None, None, is_new=True, file_path=task.file_path, title=task.title, channel_id=task.channel_id, is_removed=False)
 
+        self.idle_signal_emitted_this_cycle = False # New tasks added, so queue is not idle
+
         if not self.is_processing:
             self.start_processing()
         # If it is processing but was paused, adding a task might implicitly resume
@@ -113,9 +120,14 @@ class UploadQueueManager:
             self._log("Cannot start processing: PeerTube client not authenticated.")
             return
 
+        if not self.queue: # Do not start if queue is empty
+            self._log("Queue is empty. Not starting processing.")
+            return
+
         self.is_processing = True # Overall manager is active
         self.is_manually_paused = False # Explicitly not paused on fresh start
         self.stop_event.clear()
+        self.idle_signal_emitted_this_cycle = False # Reset when starting
 
         # Ensure only one processing thread is started
         if not self.processing_thread or not self.processing_thread.is_alive():
@@ -315,14 +327,42 @@ class UploadQueueManager:
                         # or by stop_all_and_clear_tasks.
                         pass # Task remains in queue with its new status.
                     self.current_task = None # Clear current task reference
+            self.idle_signal_emitted_this_cycle = False # Reset if a task was processed
             else: # No PENDING tasks found
-                if self.is_processing: # Still active but no work to do right now
-                    # self._log("No pending tasks to process. Waiting...") # Too noisy
-                    pass
+            if self.is_processing and not self.stop_event.is_set() and not self.is_manually_paused:
+                # Check if there are any tasks that are NOT in a terminal state
+                active_or_pending_tasks_exist = False
+                if not self.queue: # Queue is empty, so no active/pending
+                    active_or_pending_tasks_exist = False
+                else:
+                    for t in self.queue:
+                        if t.status in [TaskStatus.PENDING, TaskStatus.UPLOADING, TaskStatus.INITIALIZING]:
+                            active_or_pending_tasks_exist = True
+                            break
+
+                if not active_or_pending_tasks_exist and not self.idle_signal_emitted_this_cycle:
+                    # This means queue is empty OR all tasks are COMPLETED, FAILED, or CANCELLED
+                    self._log("Queue is now idle (no pending or active tasks). Emitting all_tasks_processed_signal.")
+                    self.all_tasks_processed_signal.emit()
+                    self.idle_signal_emitted_this_cycle = True
+                    # Consider setting self.is_processing = False here if the queue should stop trying to find tasks
+                    # For now, let it continue checking, the signal is the key.
                 time.sleep(1) # Wait before checking queue again
 
         self._log("Exited processing loop.")
-        self.is_processing = False # Ensure state is correct on exit
+        # If the loop exits (e.g. self.is_processing becomes false due to external stop, or natural finish)
+        # perform one final check.
+        if not self.stop_event.is_set(): # Only if not explicitly hard-stopped by stop_event
+            active_or_pending_tasks_exist = False
+            for t in self.queue:
+                if t.status in [TaskStatus.PENDING, TaskStatus.UPLOADING, TaskStatus.INITIALIZING]:
+                    active_or_pending_tasks_exist = True
+                    break
+            if not active_or_pending_tasks_exist and not self.idle_signal_emitted_this_cycle:
+                self._log("Processing loop exited and queue is idle. Ensuring final emission of all_tasks_processed_signal.")
+                self.all_tasks_processed_signal.emit()
+                self.idle_signal_emitted_this_cycle = True # Mark as emitted
+
         self.current_task = None # Clear current task if loop exits
 
 
