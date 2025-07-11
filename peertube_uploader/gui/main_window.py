@@ -912,12 +912,30 @@ class MainWindow(QMainWindow):
         # self._save_upload_history() # Save history on close
         # Relying on saves from _add_to_upload_history. If history could be altered elsewhere without saving,
         # this might need to be re-instated or that alteration point needs to save.
-        self.log_message("DEBUG: History is saved when items are added. Skipping explicit save from closeEvent for now to test.")
+        self.log_message("DEBUG: History is saved when items are added.")
 
         if self.queue_manager:
             self.log_message("Stopping queue manager...")
-            self.queue_manager.stop_processing()
+            self.queue_manager.stop_processing() # This might take a moment
+
+        self.log_message("DEBUG: Before super().closeEvent() in closeEvent.")
         super().closeEvent(event)
+        self.log_message("DEBUG: After super().closeEvent() in closeEvent.")
+
+        # Explicit final sync for QSettings AFTER Qt's close processing.
+        if hasattr(self, 'settings') and self.settings is not None:
+            self.log_message("DEBUG: Performing final QSettings.sync() at the end of closeEvent.")
+            self.settings.sync()
+            status = self.settings.status()
+            self.log_message(f"DEBUG: Final QSettings sync status: {status}")
+            if status != QSettings.NoError:
+                self.log_message(f"ERROR: Final QSettings sync in closeEvent reported an error: {status}")
+
+            # Attempt to ensure QSettings destructor runs and flushes
+            self.log_message("DEBUG: Deleting self.settings in closeEvent.")
+            del self.settings
+            self.settings = None # Ensure it's not accidentally accessed later if app doesn't fully exit
+
         self.log_message("Application closed.")
 
     def _load_upload_history(self):
