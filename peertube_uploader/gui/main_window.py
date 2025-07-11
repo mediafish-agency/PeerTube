@@ -55,24 +55,20 @@ class MainWindow(QMainWindow):
         self.configured_password = app_settings.get('password', '')
 
         self.log_section_group = self._create_log_section()
-        self.video_details_group = self._create_top_section()
+        # self.video_details_group = self._create_top_section() # This now returns None and is not needed here.
+        # Its functionalities are merged into local_file_browser_group.
         self.queue_section_group = self._create_queue_section()
 
         self.main_v_splitter = QSplitter(Qt.Vertical)
         self.main_v_splitter.addWidget(self.log_section_group)
 
         self.middle_h_splitter = QSplitter(Qt.Horizontal)
-        # self.middle_h_splitter.addWidget(self.video_details_group) # This will be added to a new sub-splitter
 
-        # Create Local File Browser
+        # Create Local File Browser (which now includes the details controls)
         self.local_file_browser_group = self._create_local_file_browser_group()
+        # No more video_details_group or left_pane_splitter needed as separate entities.
 
-        # New sub-splitter for Local File Browser and Video Details
-        self.left_pane_splitter = QSplitter(Qt.Horizontal)
-        self.left_pane_splitter.addWidget(self.local_file_browser_group)
-        self.left_pane_splitter.addWidget(self.video_details_group)
-
-        self.middle_h_splitter.addWidget(self.left_pane_splitter) # Add sub-splitter to the main middle splitter
+        self.middle_h_splitter.addWidget(self.local_file_browser_group) # Add directly
 
         self.channel_browser_group = QGroupBox("Available Channels")
         channel_browser_layout = QVBoxLayout()
@@ -102,32 +98,27 @@ class MainWindow(QMainWindow):
         self.main_v_splitter.setSizes([log_height, middle_area_height, queue_height])
 
         total_width = self.geometry().width()
-        # Adjust splitter for the new local browser, video details, and channel browser
-        # middle_h_splitter now contains left_pane_splitter and channel_browser_group
-        # left_pane_splitter contains local_file_browser_group and video_details_group
+        # Adjust splitter for the local_file_browser_group and channel_browser_group
+        # self.left_pane_splitter is removed.
+        # self.video_details_group is removed / merged.
 
-        # Proportions for middle_h_splitter (left_pane_splitter vs channel_browser_group)
-        left_pane_width = int(total_width * 0.65)
-        channel_browser_width = int(total_width * 0.35)
-        self.middle_h_splitter.setSizes([left_pane_width, channel_browser_width])
+        # Proportions for middle_h_splitter (local_file_browser_group vs channel_browser_group)
+        # Give local browser a bit more space as it now contains more controls.
+        local_browser_and_details_width = int(total_width * 0.60)
+        channel_browser_width = int(total_width * 0.40)
+        self.middle_h_splitter.setSizes([local_browser_and_details_width, channel_browser_width])
 
-        # Proportions for left_pane_splitter (local_file_browser vs video_details)
-        local_browser_width_ratio = 0.5
-        video_details_width_ratio = 0.5
-        self.left_pane_splitter.setSizes([int(left_pane_width * local_browser_width_ratio),
-                                          int(left_pane_width * video_details_width_ratio)])
-
+        # No more left_pane_splitter to size.
 
         self.overall_layout.addWidget(self.main_v_splitter)
         self._create_status_bar()
 
-        # The channel_search_input and its label are now created in _create_top_section but added to channel_browser_layout here
-        # We need to ensure channel_search_input is initialized before being used in _on_channel_search_changed if load_channels is called early.
-        # However, _create_top_section is called before channel_browser_group is fully set up.
-        # Let's move the creation of search_layout directly into the channel_browser_group setup.
+        # The channel_search_input is created in the channel browser setup.
+        # Video Details related widgets (file_path_input, title_input, add_to_queue_button)
+        # are now created within _create_local_file_browser_group.
 
         self.log_message(f"Application started. Configured endpoint: {'Provided' if self.configured_instance_url else 'Not Provided'}.")
-        self._initialize_local_file_browser() # Initialize the file browser content
+        # _initialize_local_file_browser is called at the end of _create_local_file_browser_group
 
         if self.configured_instance_url and self.configured_username:
             self._attempt_auto_connection()
@@ -138,11 +129,15 @@ class MainWindow(QMainWindow):
             self.log_message("Auto-connect skipped: Username not configured in settings.py.")
             self._update_connection_status_indicator(False, "Username not configured")
 
-        self._update_add_to_queue_button_state()
+        # Call _update_add_to_queue_button_state AFTER all relevant widgets are created.
+        # This will be handled by ensuring _create_local_file_browser_group and other UI setup methods
+        # correctly initialize widgets before this is first called.
+        # self._update_add_to_queue_button_state() # Moved to after widget creation
         self._update_queue_control_button_states()
 
+
     def _create_local_file_browser_group(self):
-        group = QGroupBox("Local File Browser")
+        group = QGroupBox("Local Browser & Upload Details") # Renamed Group
         layout = QVBoxLayout()
 
         # Directory Tree View
@@ -150,10 +145,47 @@ class MainWindow(QMainWindow):
         self.dir_model = QFileSystemModel()
         self.dir_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs)
         self.dir_tree_view.setModel(self.dir_model)
-        self.dir_tree_view.setHeaderHidden(True) # Hide header for cleaner look
-        for i in range(1, self.dir_model.columnCount()): # Hide all columns except the name
+        self.dir_tree_view.setHeaderHidden(True)
+        for i in range(1, self.dir_model.columnCount()):
             self.dir_tree_view.hideColumn(i)
         self.dir_tree_view.clicked.connect(self._on_local_dir_selected)
+        layout.addWidget(self.dir_tree_view) # Add tree view to main layout first
+
+        # Container for Video File, Title, and Add to Queue button
+        controls_container = QWidget()
+        controls_layout = QVBoxLayout(controls_container)
+        controls_layout.setContentsMargins(0, 5, 0, 5) # Add some spacing
+
+        # Video File Input
+        file_layout = QHBoxLayout()
+        self.file_path_input = QLineEdit()
+        self.file_path_input.setPlaceholderText("Select video file...")
+        self.file_path_input.setReadOnly(True)
+        # Connect textChanged here if needed, or rely on _update_add_to_queue_button_state calls
+        # self.file_path_input.textChanged.connect(self._update_add_to_queue_button_state)
+        browse_button = QPushButton("Browse")
+        browse_button.clicked.connect(self.browse_file)
+        file_layout.addWidget(QLabel("File:")) # Shorter label
+        file_layout.addWidget(self.file_path_input)
+        file_layout.addWidget(browse_button)
+        controls_layout.addLayout(file_layout)
+
+        # Title Input
+        title_layout = QHBoxLayout()
+        self.title_input = QLineEdit()
+        self.title_input.setPlaceholderText("Enter video title (3-120 characters)")
+        self.title_input.textChanged.connect(self._update_add_to_queue_button_state) # Connect here
+        title_layout.addWidget(QLabel("Title:"))
+        title_layout.addWidget(self.title_input)
+        controls_layout.addLayout(title_layout)
+
+        # Add to Queue Button
+        self.add_to_queue_button = QPushButton("Add to Upload Queue")
+        self.add_to_queue_button.clicked.connect(self.add_to_queue)
+        self.add_to_queue_button.setEnabled(False) # Initial state
+        controls_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
+
+        layout.addWidget(controls_container) # Add controls container to main layout
 
         # Files List View
         self.file_list_view = QListView()
@@ -165,26 +197,41 @@ class MainWindow(QMainWindow):
         self.file_model.setNameFilterDisables(False) # Ensure filter is active
 
         self.file_list_view.setModel(self.file_model)
-        self.file_list_view.setEditTriggers(QAbstractItemView.NoEditTriggers) # Make it read-only
+        self.file_list_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.file_list_view.doubleClicked.connect(self._on_local_file_double_clicked)
+        layout.addWidget(self.file_list_view) # Add file list view to main layout
 
-        splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(self.dir_tree_view)
-        splitter.addWidget(self.file_list_view)
-        splitter.setSizes([200, 300]) # Initial sizes for dir tree and file list
+        # The splitter is no longer needed here as elements are in QVBoxLayout
+        # splitter = QSplitter(Qt.Vertical)
+        # splitter.addWidget(self.dir_tree_view) # dir_tree_view is now directly in layout
+        # # The bottom part of splitter would be a new widget containing controls + file_list_view
+        # bottom_widget = QWidget()
+        # bottom_layout = QVBoxLayout(bottom_widget)
+        # bottom_layout.addWidget(controls_container)
+        # bottom_layout.addWidget(self.file_list_view)
+        # bottom_layout.setContentsMargins(0,0,0,0)
+        # splitter.addWidget(bottom_widget)
+        # splitter.setSizes([150, 450]) # Adjust sizes
 
-        layout.addWidget(splitter)
+        # layout.addWidget(splitter) # Add splitter to group's main layout
         group.setLayout(layout)
+
+        self._initialize_local_file_browser() # Initialize paths for models
+        self._update_add_to_queue_button_state() # Crucial: update button state after all related widgets are created
+
         return group
 
     def _initialize_local_file_browser(self):
-        # Set initial path for directory tree (e.g., user's home directory)
+        # Ensure models are created before calling this
+        if not hasattr(self, 'dir_model') or not hasattr(self, 'file_model'):
+            self.log_message("Error: File browser models not ready for initialization.")
+            return
+
         home_path = QDir.homePath()
         self.dir_model.setRootPath(home_path)
         self.dir_tree_view.setRootIndex(self.dir_model.index(home_path))
 
-        # Set initial path for file list (same as directory tree)
-        self.file_model.setRootPath(home_path)
+        self.file_model.setRootPath(home_path) # Initialize file model to the same path
         self.file_list_view.setRootIndex(self.file_model.index(home_path))
         self.log_message(f"Local file browser initialized to: {home_path}")
 
@@ -217,38 +264,17 @@ class MainWindow(QMainWindow):
 
 
     def _create_top_section(self):
-        top_section_group = QGroupBox("Video Details")
-        top_layout = QVBoxLayout()
+        # This method previously created the "Video Details" group box,
+        # including file_path_input, title_input, and add_to_queue_button.
+        # These widgets and their functionalities have been moved to _create_local_file_browser_group.
+        # This group box ("Video Details") is no longer needed as a separate entity.
 
-        file_layout = QHBoxLayout()
-        self.file_path_input = QLineEdit()
-        self.file_path_input.setPlaceholderText("Select video file...")
-        self.file_path_input.setReadOnly(True)
-        browse_button = QPushButton("Browse")
-        browse_button.clicked.connect(self.browse_file)
-        file_layout.addWidget(QLabel("Video File:"))
-        file_layout.addWidget(self.file_path_input)
-        file_layout.addWidget(browse_button)
-        top_layout.addLayout(file_layout)
-
-        # The search_layout related to channel search is now moved to the channel browser group.
-        # self.channel_search_input is initialized there.
-
-        title_layout = QHBoxLayout()
-        self.title_input = QLineEdit()
-        self.title_input.setPlaceholderText("Enter video title (3-120 characters)")
-        self.title_input.textChanged.connect(self._update_add_to_queue_button_state)
-        title_layout.addWidget(QLabel("Title:"))
-        title_layout.addWidget(self.title_input)
-        top_layout.addLayout(title_layout)
-
-        self.add_to_queue_button = QPushButton("Add to Upload Queue")
-        self.add_to_queue_button.clicked.connect(self.add_to_queue)
-        self.add_to_queue_button.setEnabled(False)
-        top_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
-
-        top_section_group.setLayout(top_layout)
-        return top_section_group
+        # If there were other elements specific to a "top section" that were not moved,
+        # they would remain here. For now, it seems this method's original purpose is fulfilled elsewhere.
+        # To avoid errors if it's still called, we can return a dummy QWidget or None,
+        # or ensure it's no longer called.
+        # For now, let's make it return None, and adjust the call site in __init__.
+        return None
 
     def _create_queue_section(self):
         queue_section_group = QGroupBox("Upload Queue")
