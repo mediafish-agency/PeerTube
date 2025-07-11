@@ -2,7 +2,6 @@ import time
 import threading
 from enum import Enum
 import os
-import concurrent.futures # Added for ThreadPoolExecutor
 
 from api.peertube_client import PeerTubeClient
 
@@ -36,18 +35,18 @@ class VideoUploadTask:
 
 
 class UploadQueueManager:
-    def __init__(self, peertube_client: PeerTubeClient, status_update_callback=None, log_callback=None, max_concurrent_uploads=2):
+    def __init__(self, peertube_client: PeerTubeClient, status_update_callback=None, log_callback=None, upload_chunk_size_mb=4):
         self.queue = []
         self.peertube_client = peertube_client
-        # self.current_task = None # Replaced by multiple active tasks logic
-        self.active_tasks = {} # task_id: future - To keep track of tasks currently in ThreadPoolExecutor
+        self.current_task = None
         self.is_processing = False
         self.stop_event = threading.Event()
-        self.queue_lock = threading.Lock() # Protects self.queue and self.active_tasks
+        self.queue_lock = threading.Lock()
         self.task_id_counter = 0
-        # self.processing_thread = None # Replaced by ThreadPoolExecutor
-        self.executor = None
-        self.max_concurrent_uploads = max_concurrent_uploads
+        self.processing_thread = None
+        self.upload_chunk_size_mb = upload_chunk_size_mb # Use passed argument, default to 4MB
+        self.chunk_size_bytes = self.upload_chunk_size_mb * 1024 * 1024
+
 
         # Callbacks to update GUI or log messages
         self.status_update_callback = status_update_callback # func(task_id, status, progress, video_id_on_peertube, error_message)
@@ -94,129 +93,66 @@ class UploadQueueManager:
             if self.status_update_callback: # Notify GUI about new task in queue
                  self.status_update_callback(task.task_id, task.status, task.progress, None, None, is_new=True, file_path=task.file_path, title=task.title, channel_id=task.channel_id, is_removed=False)
 
-        if not self.is_processing: # If not already running, start it.
+        if not self.is_processing:
             self.start_processing()
-        else: # If already running, explicitly try to schedule tasks.
-            self._schedule_tasks()
         return task.task_id
 
     def start_processing(self):
-        if self.is_processing and self.executor:
+        if self.is_processing:
             self._log("Processing already started.")
             return
 
         if not self.peertube_client or not self.peertube_client.access_token:
             self._log("Cannot start processing: PeerTube client not authenticated.")
+            # Potentially signal GUI to prompt for authentication
             return
 
         self.is_processing = True
         self.stop_event.clear()
-        if not self.executor: # Create executor if it doesn't exist or was shut down
-            self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_concurrent_uploads)
-
-        self._log(f"Started queue processing with up to {self.max_concurrent_uploads} concurrent uploads.")
-        self._schedule_tasks() # Initial scheduling of tasks
+        self.processing_thread = threading.Thread(target=self._process_queue, daemon=True)
+        self.processing_thread.start()
+        self._log("Started queue processing thread.")
 
     def stop_processing(self):
         self._log("Stopping queue processing...")
-        self.is_processing = False # Prevent new tasks from being scheduled by _schedule_tasks
-        self.stop_event.set()      # Signal tasks currently in _handle_upload to stop
-
-        if self.executor:
-            # It's important to not hold the lock while calling future.cancel() or waiting for shutdown,
-            # as done_callbacks (like _task_done_callback) might need the lock.
-
-            # Get a list of futures to attempt to cancel.
-            futures_to_cancel = []
-            with self.queue_lock:
-                for task_id, future_item in self.active_tasks.items():
-                    # Check if future is not done before trying to cancel
-                    if not future_item.done():
-                         futures_to_cancel.append((task_id, future_item))
-
-            for task_id, future in futures_to_cancel:
-                if future.cancel(): # Returns True if future was indeed cancelled
-                    self._log(f"Task {task_id} was pending in executor and has been cancelled.")
-                    # The _task_done_callback will be triggered for this cancelled future
-                    # and will update the task status appropriately.
-                else:
-                    # If cancel() returned False, the task might be running or already done.
-                    # Running tasks need to check self.stop_event.
-                     if not future.done(): # Check again, as it might have finished quickly
-                        self._log(f"Task {task_id} could not be cancelled (likely already running or completed). Relies on stop_event.")
-
-            # Wait for all tasks to complete their execution or acknowledge cancellation.
-            # Tasks that were successfully cancelled by future.cancel() will complete quickly.
-            # Tasks already running will complete if they check self.stop_event and exit,
-            # or they will run to completion/error if they don't.
-            self.executor.shutdown(wait=True)
-            self.executor = None # Mark executor as shut down
-
+        self.is_processing = False
+        self.stop_event.set()
+        if self.processing_thread and self.processing_thread.is_alive():
+            # If current task is resumable, consider cancelling it on PeerTube
+            if self.current_task and self.current_task.resumable_upload_id:
+                self._log(f"Attempting to cancel ongoing resumable upload {self.current_task.resumable_upload_id} for task {self.current_task.task_id}")
+                # This cancel needs to be non-blocking or handled carefully if stop_processing is called from main thread
+                # For now, let's assume it's quick or the worker thread handles it upon seeing stop_event
+            self.processing_thread.join(timeout=10) # Wait for thread to finish
         self._log("Queue processing stopped.")
 
-    def _task_done_callback(self, future, task_id):
-        """Callback executed when a future (task) finishes or is cancelled."""
-        with self.queue_lock:
-            self.active_tasks.pop(task_id, None)
-            task = self.get_task_by_id(task_id) # Get task again to check its final status
 
-        if task: # Check if task still exists (wasn't removed)
-            if future.cancelled():
-                self._log(f"Task {task_id} ('{task.title}') was cancelled via future.")
-                if task.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
-                     self._update_task_status(task, TaskStatus.CANCELLED, error="Cancelled during shutdown or removal.")
-            elif future.exception():
-                exc = future.exception()
-                self._log(f"Task {task_id} ('{task.title}') failed with exception: {exc}")
-                if task.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
-                    self._update_task_status(task, TaskStatus.FAILED, error=str(exc))
-            else: # Completed successfully (from _handle_upload perspective)
-                 self._log(f"Task {task_id} ('{task.title}') future completed. Final status: {task.status.value}")
+    def _process_queue(self):
+        while self.is_processing and not self.stop_event.is_set():
+            task_to_process = None
+            with self.queue_lock:
+                if self.queue:
+                    # Find first PENDING task
+                    for task_in_q in self.queue:
+                        if task_in_q.status == TaskStatus.PENDING:
+                            task_to_process = task_in_q
+                            break
 
-        if self.is_processing: # If still processing, try to schedule more tasks
-            self._schedule_tasks()
-
-
-    def _schedule_tasks(self):
-        if not self.is_processing or self.stop_event.is_set():
-            return
-
-        with self.queue_lock:
-            if len(self.active_tasks) >= self.max_concurrent_uploads:
-                return # Max concurrent tasks already running
-
-            # Find PENDING tasks to schedule
-            tasks_to_schedule = []
-            for task in self.queue:
-                if task.status == TaskStatus.PENDING and task.task_id not in self.active_tasks:
-                    tasks_to_schedule.append(task)
-                    if len(self.active_tasks) + len(tasks_to_schedule) >= self.max_concurrent_uploads:
-                        break
-
-            for task in tasks_to_schedule:
-                if task.task_id not in self.active_tasks: # Double check
-                    self._log(f"Submitting task {task.task_id} ('{task.title}') to executor.")
-                    future = self.executor.submit(self._handle_upload, task)
-                    future.add_done_callback(lambda f, t_id=task.task_id: self._task_done_callback(f, t_id))
-                    self.active_tasks[task.task_id] = future
-                else:
-                    self._log(f"Task {task.task_id} ('{task.title}') was already active, not re-scheduling.")
-
+            if task_to_process:
+                self.current_task = task_to_process
+                self._log(f"Processing task: {self.current_task.title} (ID: {self.current_task.task_id})")
+                self._handle_upload(self.current_task)
+                self.current_task = None # Clear current task after handling
+            else:
+                if not self.queue and self.is_processing: # Queue is empty, but manager is still "on"
+                    self._log("Queue is empty. Waiting for new tasks...")
+                time.sleep(2)  # Wait before checking queue again if empty or no pending tasks
+        self._log("Exited processing loop.")
+        self.is_processing = False # Ensure state is correct on exit
 
     def _handle_upload(self, task: VideoUploadTask):
-        """Handles the upload of a single video task. Executed by a worker thread."""
-        if self.stop_event.is_set(): # Check if manager was stopped before task even started
-            self._log(f"Upload for task {task.task_id} ('{task.title}') cancelled before start due to stop_event.")
-            self._update_task_status(task, TaskStatus.CANCELLED, error="Cancelled before start.")
-            return
-
         self._update_task_status(task, TaskStatus.INITIALIZING)
-        try:
-            task.total_size = os.path.getsize(task.file_path)
-        except OSError as e:
-            self._log(f"Error getting file size for task {task.task_id}: {e}")
-            self._update_task_status(task, TaskStatus.FAILED, error=f"File error: {e}")
-            return
+        task.total_size = os.path.getsize(task.file_path)
 
         init_response = self.peertube_client.upload_video_resumable_init(
             channel_id=task.channel_id,
@@ -238,11 +174,12 @@ class UploadQueueManager:
 
         self._update_task_status(task, TaskStatus.UPLOADING, progress=0)
 
-        chunk_size = 1024 * 1024 * 2  # 2MB chunks, configurable
+        # Use the configurable chunk_size_bytes
+        # chunk_size = 1024 * 1024 * 2  # Old hardcoded value
         task.bytes_uploaded = 0
 
         while task.bytes_uploaded < task.total_size and not self.stop_event.is_set():
-            current_chunk_size = min(chunk_size, task.total_size - task.bytes_uploaded)
+            current_chunk_size = min(self.chunk_size_bytes, task.total_size - task.bytes_uploaded)
 
             upload_status_result = self.peertube_client.upload_video_chunk(
                 upload_id=task.resumable_upload_id,

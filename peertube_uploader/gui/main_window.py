@@ -265,9 +265,10 @@ class MainWindow(QMainWindow):
                 self.queue_manager = UploadQueueManager(
                     peertube_client=self.peertube_client,
                     status_update_callback=self.gui_signals.emit_task_update,
-                    log_callback=self.gui_signals.emit_log
+                    log_callback=self.gui_signals.emit_log,
+                    upload_chunk_size_mb=4 # Explicitly pass chunk size, or let it use its default
                 )
-                self.log_message("UploadQueueManager initialized.")
+                self.log_message("UploadQueueManager initialized with 4MB chunk size.") # Log new chunk size
                 # queue_manager.start_processing() will be called when a task is added if not already running.
 
             self.load_channels()
