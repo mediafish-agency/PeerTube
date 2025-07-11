@@ -68,16 +68,14 @@ class MainWindow(QMainWindow):
         self.middle_h_splitter = QSplitter(Qt.Horizontal)
         self.middle_h_splitter.addWidget(self.video_details_group) # Add video details to left of h_splitter
 
-        # Placeholder for right pane of middle_h_splitter
-        self.right_middle_placeholder = QFrame() # Using QFrame for potential styling (e.g. border)
-        self.right_middle_placeholder.setFrameShape(QFrame.StyledPanel)
-        # Optional: Add a label to the placeholder
-        placeholder_layout = QVBoxLayout(self.right_middle_placeholder)
-        placeholder_label = QLabel("Right Pane Placeholder\n(Future content, e.g., selected channel details or video preview)")
-        placeholder_label.setAlignment(Qt.AlignCenter)
-        placeholder_layout.addWidget(placeholder_label)
-        self.right_middle_placeholder.setLayout(placeholder_layout)
-        self.middle_h_splitter.addWidget(self.right_middle_placeholder) # Add placeholder to right of h_splitter
+        # Right Pane: Channel Browser
+        self.channel_browser_group = QGroupBox("Available Channels")
+        channel_browser_layout = QVBoxLayout()
+        self.channel_list_widget = QListWidget()
+        self.channel_list_widget.currentItemChanged.connect(self._on_channel_list_selection_changed) # Connect signal
+        channel_browser_layout.addWidget(self.channel_list_widget)
+        self.channel_browser_group.setLayout(channel_browser_layout)
+        self.middle_h_splitter.addWidget(self.channel_browser_group) # Add channel browser to right of h_splitter
 
         self.main_v_splitter.addWidget(self.middle_h_splitter) # Pane 1 (Middle)
 
@@ -151,25 +149,19 @@ class MainWindow(QMainWindow):
         search_layout = QHBoxLayout()
         self.channel_search_input = QLineEdit()
         self.channel_search_input.setPlaceholderText("Search channels by name or handle...")
-        self.channel_search_input.textChanged.connect(self._on_channel_search_changed) # Connect the signal
+        self.channel_search_input.textChanged.connect(self._on_channel_search_changed)
         search_layout.addWidget(QLabel("Search Channel:"))
         search_layout.addWidget(self.channel_search_input)
         top_layout.addLayout(search_layout)
 
-        # Channel Selection
-        channel_layout = QHBoxLayout()
-        self.channel_combo = QComboBox()
-        self.channel_combo.addItem("Connect to instance first")
-        self.channel_combo.setEnabled(False)
-        self.channel_combo.currentIndexChanged.connect(self._on_channel_selection_change)
-        channel_layout.addWidget(QLabel("Channel:"))
-        channel_layout.addWidget(self.channel_combo, 1)
-        top_layout.addLayout(channel_layout)
+        # Channel Selection QComboBox and its layout are now removed.
+        # Selection is handled by self.channel_list_widget in the right pane.
 
         # Title
         title_layout = QHBoxLayout()
         self.title_input = QLineEdit()
-        self.title_input.setPlaceholderText("Enter video title")
+        self.title_input.setPlaceholderText("Enter video title (3-120 characters)")
+        self.title_input.textChanged.connect(self._update_add_to_queue_button_state) # Connect title changes
         title_layout.addWidget(QLabel("Title:"))
         title_layout.addWidget(self.title_input)
         top_layout.addLayout(title_layout)
@@ -181,7 +173,6 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.add_to_queue_button, alignment=Qt.AlignCenter)
 
         top_section_group.setLayout(top_layout)
-        # self.overall_layout.addWidget(top_section_group) # Removed: Will be added to splitter
         return top_section_group
 
     def _create_queue_section(self):
@@ -496,19 +487,21 @@ class MainWindow(QMainWindow):
 
         file_path = self.file_path_input.text()
         title = self.title_input.text().strip()
-        current_channel_index = self.channel_combo.currentIndex()
+
+        # Get channel_id from the new selection mechanism
+        channel_id = self.selected_channel_id_from_list
 
         if not file_path:
             QMessageBox.warning(self, "Input Error", "Please select a video file.")
             return
 
-        if current_channel_index <= 0:
-            QMessageBox.warning(self, "Input Error", "Please select a channel.")
+        if channel_id is None: # Check if a channel is selected from the list widget
+            QMessageBox.warning(self, "Input Error", "Please select a channel from the list.")
             return
 
-        channel_id = self.channel_combo.itemData(current_channel_index)
+        # channel_id is already the actual ID, no need for itemData lookup
 
-        if not title:
+        if not title: # This check might be redundant if _check_title_validity is comprehensive
             QMessageBox.warning(self, "Input Error", "Please enter a video title.")
             return
         if not (3 <= len(title) <= 120):
