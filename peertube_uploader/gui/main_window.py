@@ -112,6 +112,8 @@ class MainWindow(QMainWindow):
             self.log_message("Auto-connect skipped: Username not configured in settings.py.")
             self._update_connection_status_indicator(False, "Username not configured") # Simpler message
 
+        self._update_add_to_queue_button_state() # Set initial state of add_to_queue_button
+
 
     def _create_status_bar(self):
         self.statusBar = QStatusBar()
