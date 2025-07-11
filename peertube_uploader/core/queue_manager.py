@@ -297,7 +297,7 @@ class UploadQueueManager(QObject): # Inherit from QObject to use signals
     def _process_queue(self):
         while self.is_processing and not self.stop_event.is_set():
             if self.is_manually_paused:
-                time.sleep(1) # Sleep while paused
+                time.sleep(1)  # Sleep while paused
                 continue
 
             task_to_process = None
@@ -309,61 +309,48 @@ class UploadQueueManager(QObject): # Inherit from QObject to use signals
                         break
 
             if task_to_process:
-                self.current_task = task_to_process # Set current task
-                # No need to remove from queue here, _handle_upload doesn't modify queue
+                self.current_task = task_to_process
                 self._log(f"Processing task: {self.current_task.title} (ID: {self.current_task.task_id})")
                 self._handle_upload(self.current_task)
 
-                # After _handle_upload finishes (completes, fails, or cancels itself due to stop_event):
                 with self.queue_lock:
                     if self.current_task and self.current_task.task_id == task_to_process.task_id:
-                        # If the task wasn't removed by another operation (e.g. explicit remove_task call)
-                        # and its status indicates it should be removed from pending (e.g. not pending anymore)
-                        # This part is tricky because PENDING tasks are not removed from self.queue until processed.
-                        # The current logic is that _handle_upload sets the final status.
-                        # The queue only contains PENDING tasks that are waiting, or tasks that are being processed.
-                        # Let's simplify: _process_queue picks a PENDING task. _handle_upload changes its status.
-                        # The task remains in self.queue until explicitly removed by user (remove_task, clear_completed)
-                        # or by stop_all_and_clear_tasks.
-                        pass # Task remains in queue with its new status.
-                    self.current_task = None # Clear current task reference
-            self.idle_signal_emitted_this_cycle = False # Reset if a task was processed
-            else: # No PENDING tasks found
-            if self.is_processing and not self.stop_event.is_set() and not self.is_manually_paused:
-                # Check if there are any tasks that are NOT in a terminal state
-                active_or_pending_tasks_exist = False
-                if not self.queue: # Queue is empty, so no active/pending
-                    active_or_pending_tasks_exist = False
-                else:
-                    for t in self.queue:
-                        if t.status in [TaskStatus.PENDING, TaskStatus.UPLOADING, TaskStatus.INITIALIZING]:
-                            active_or_pending_tasks_exist = True
-                            break
+                        # Task remains in queue with its new status.
+                        pass
+                    self.current_task = None  # Clear current task reference
 
-                if not active_or_pending_tasks_exist and not self.idle_signal_emitted_this_cycle:
-                    # This means queue is empty OR all tasks are COMPLETED, FAILED, or CANCELLED
-                    self._log("Queue is now idle (no pending or active tasks). Emitting all_tasks_processed_signal.")
-                    self.all_tasks_processed_signal.emit()
-                    self.idle_signal_emitted_this_cycle = True
-                    # Consider setting self.is_processing = False here if the queue should stop trying to find tasks
-                    # For now, let it continue checking, the signal is the key.
-                time.sleep(1) # Wait before checking queue again
+                self.idle_signal_emitted_this_cycle = False  # Reset if a task was processed
+
+            else:
+                # No PENDING tasks found
+                if self.is_processing and not self.stop_event.is_set() and not self.is_manually_paused:
+                    # Check if there are any non-terminal tasks
+                    active_or_pending_tasks_exist = any(
+                        t.status in [TaskStatus.PENDING, TaskStatus.UPLOADING, TaskStatus.INITIALIZING]
+                        for t in self.queue
+                    )
+
+                    if not active_or_pending_tasks_exist and not self.idle_signal_emitted_this_cycle:
+                        self._log("Queue is now idle (no pending or active tasks). Emitting all_tasks_processed_signal.")
+                        self.all_tasks_processed_signal.emit()
+                        self.idle_signal_emitted_this_cycle = True
+
+                time.sleep(1)  # Wait before checking queue again
 
         self._log("Exited processing loop.")
-        # If the loop exits (e.g. self.is_processing becomes false due to external stop, or natural finish)
-        # perform one final check.
-        if not self.stop_event.is_set(): # Only if not explicitly hard-stopped by stop_event
-            active_or_pending_tasks_exist = False
-            for t in self.queue:
-                if t.status in [TaskStatus.PENDING, TaskStatus.UPLOADING, TaskStatus.INITIALIZING]:
-                    active_or_pending_tasks_exist = True
-                    break
+
+        # Final check if loop exited naturally (not by stop_event)
+        if not self.stop_event.is_set():
+            active_or_pending_tasks_exist = any(
+                t.status in [TaskStatus.PENDING, TaskStatus.UPLOADING, TaskStatus.INITIALIZING]
+                for t in self.queue
+            )
             if not active_or_pending_tasks_exist and not self.idle_signal_emitted_this_cycle:
                 self._log("Processing loop exited and queue is idle. Ensuring final emission of all_tasks_processed_signal.")
                 self.all_tasks_processed_signal.emit()
-                self.idle_signal_emitted_this_cycle = True # Mark as emitted
+                self.idle_signal_emitted_this_cycle = True # Though it might not matter much at this point
 
-        self.current_task = None # Clear current task if loop exits
+        self.current_task = None  # Clear current task if loop exits
 
 
     def _handle_upload(self, task: VideoUploadTask):
